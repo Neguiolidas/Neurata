@@ -50,7 +50,7 @@ def deposit(home: ArmariumHome, content: "str | None" = None,
                 "path": previous["path"], "hash": content_hash}
 
     entry_id = new_ulid()
-    entry_title = title or _first_line(content) or "sem título"
+    entry_title = _sanitize_title(title or _first_line(content)) or "sem título"
     slug = slugify(entry_title)
     path = home.inbox / f"{entry_id}-{slug}.md"
     meta = {
@@ -65,6 +65,11 @@ def deposit(home: ArmariumHome, content: "str | None" = None,
     }
     path.write_text(serialize(meta, content), encoding="utf-8")
     rel = str(path.relative_to(home.root))
+    # Write-then-log é não atômico: um crash entre as duas linhas deixa um
+    # arquivo órfão (sem evento "created" no log). A verificação de
+    # existência em _find_previous (FIX 1) cobre a direção inversa —
+    # log aponta p/ arquivo apagado — permitindo redepósito seguro; o
+    # órfão em si fica para uma reconciliação futura (ex.: reindex/gc).
     home.append_log("deposits", {"ts": now, "hash": content_hash,
                                  "action": "created", "id": entry_id,
                                  "path": rel, "envelope": envelope})
@@ -90,9 +95,25 @@ def _flatten(envelope: dict) -> dict:
 
 def _find_previous(home: ArmariumHome, content_hash: str) -> "dict | None":
     for rec in home.read_log("deposits"):
-        if rec.get("hash") == content_hash and rec.get("action") == "created":
-            return rec
+        if rec.get("hash") != content_hash or rec.get("action") != "created":
+            continue
+        # Um "created" no log só conta como duplicata viva se o arquivo
+        # que ele aponta ainda existe. `path` é gravado relativo a
+        # home.root (ver `rel = str(path.relative_to(home.root))` acima),
+        # então resolvemos do mesmo jeito para checar existência.
+        recorded_path = rec.get("path")
+        if not recorded_path or not (home.root / recorded_path).is_file():
+            continue
+        return rec
     return None
+
+
+def _sanitize_title(title: "str | None") -> "str | None":
+    if title is None:
+        return None
+    # Colapsa newline/CR (e runs de whitespace) p/ 1 espaço — um título
+    # multilinha gera frontmatter que `frontmatter.parse` não reparseia.
+    return " ".join(title.split())
 
 
 def _first_line(content: str) -> str:

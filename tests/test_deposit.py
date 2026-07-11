@@ -71,6 +71,34 @@ def test_missing_file(tmp_path):
         deposit(home, file=home.root / "nao-existe.md")
 
 
+def test_redeposit_after_inbox_file_deleted_creates_fresh_entry(tmp_path):
+    home = _home(tmp_path)
+    r1 = deposit(home, "conteúdo que será apagado")
+    assert r1["action"] == "created"
+    dup = deposit(home, "conteúdo que será apagado")
+    assert dup["action"] == "duplicate"
+    (home.root / r1["path"]).unlink()
+
+    r2 = deposit(home, "conteúdo que será apagado")
+
+    assert r2["action"] == "created"
+    assert r2["id"] != r1["id"]
+    assert (home.root / r2["path"]).is_file()
+    log = home.read_log("deposits")
+    assert len(log) == 3
+    created = [e for e in log if e["action"] == "created"]
+    assert len(created) == 2
+
+
+def test_multiline_title_is_sanitized_and_frontmatter_reparses(tmp_path):
+    home = _home(tmp_path)
+    rec = deposit(home, "corpo qualquer", title="line1\nline2")
+    assert rec["action"] == "created"
+    text = (home.root / rec["path"]).read_text()
+    meta, _ = parse(text)
+    assert meta["title"] == "line1 line2"
+
+
 def test_git_envelope_flattened_in_frontmatter_nested_in_log(tmp_path):
     # Rodar do root do repo Armarium dá git context de graça no envelope.
     home = _home(tmp_path)
