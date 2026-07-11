@@ -1,12 +1,12 @@
-"""armarium/doctor.py — self-check com remediação. Nunca degrada em silêncio."""
+"""neurata/doctor.py — self-check com remediação. Nunca degrada em silêncio."""
 import json
 import sqlite3
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from armarium.home import SCHEMA_VERSION, ArmariumHome
-from armarium.indexdb import fts5_available
+from neurata.home import SCHEMA_VERSION, NeurataHome
+from neurata.indexdb import fts5_available
 
 
 @dataclass
@@ -17,7 +17,7 @@ class Check:
     remedy: str = field(default="")
 
 
-def run_checks(home: ArmariumHome) -> list[Check]:
+def run_checks(home: NeurataHome) -> list[Check]:
     checks = [_python(), _layout(home)]
     if checks[-1].status == "fail":
         return checks
@@ -45,17 +45,17 @@ def _python() -> Check:
                  "" if ok else "instale Python >= 3.10")
 
 
-def _layout(home: ArmariumHome) -> Check:
+def _layout(home: NeurataHome) -> Check:
     missing = [d.name for d in (home.library, home.inbox, home.archive,
                                 home.quarantine, home.logs) if not d.is_dir()]
     if missing:
         return Check("home-layout", "fail", f"faltando: {missing}",
-                     "rode `armarium doctor` após `armarium deposit` inicial "
+                     "rode `neurata doctor` após `neurata deposit` inicial "
                      "ou crie o home: qualquer comando faz init")
     return Check("home-layout", "ok", str(home.root))
 
 
-def _config(home: ArmariumHome) -> Check:
+def _config(home: NeurataHome) -> Check:
     try:
         cfg = home.load_config()
     except (OSError, ValueError):
@@ -69,7 +69,7 @@ def _config(home: ArmariumHome) -> Check:
     return Check("config", "ok", f"schema_version={SCHEMA_VERSION}")
 
 
-def _fts5(home: ArmariumHome) -> Check:
+def _fts5(home: NeurataHome) -> Check:
     con = sqlite3.connect(":memory:")
     try:
         ok = fts5_available(con)
@@ -80,23 +80,23 @@ def _fts5(home: ArmariumHome) -> Check:
                  "" if ok else "instale Python/sqlite com FTS5 habilitado")
 
 
-def _index(home: ArmariumHome) -> Check:
+def _index(home: NeurataHome) -> Check:
     if not home.index_path.exists():
         return Check("index", "warn", "index.db ausente",
-                     "rode `armarium reindex`")
+                     "rode `neurata reindex`")
     con = sqlite3.connect(home.index_path)
     try:
         con.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
     except sqlite3.DatabaseError:
         return Check("index", "fail", "index.db corrompido (não é sqlite)",
-                     "apague index.db e rode `armarium reindex` "
+                     "apague index.db e rode `neurata reindex` "
                      "(o índice é cache descartável)")
     finally:
         con.close()
     return Check("index", "ok", str(home.index_path))
 
 
-def _meta(home: ArmariumHome, key: str) -> "str | None":
+def _meta(home: NeurataHome, key: str) -> "str | None":
     if not home.index_path.exists():
         return None
     con = sqlite3.connect(home.index_path)
@@ -110,11 +110,11 @@ def _meta(home: ArmariumHome, key: str) -> "str | None":
         con.close()
 
 
-def _freshness(home: ArmariumHome) -> Check:
+def _freshness(home: NeurataHome) -> Check:
     last = _meta(home, "last_reindex")
     if last is None:
         return Check("index-freshness", "warn", "sem last_reindex",
-                     "rode `armarium reindex`")
+                     "rode `neurata reindex`")
     last_ts = datetime.fromisoformat(last).timestamp()
     # last_reindex tem resolução de segundos — floor dos dois lados
     stale = [str(p.relative_to(home.root))
@@ -124,11 +124,11 @@ def _freshness(home: ArmariumHome) -> Check:
     if stale:
         return Check("index-freshness", "warn",
                      f"{len(stale)} arquivo(s) mais novos que o índice",
-                     "rode `armarium reindex`")
+                     "rode `neurata reindex`")
     return Check("index-freshness", "ok", f"last_reindex={last}")
 
 
-def _skipped(home: ArmariumHome) -> Check:
+def _skipped(home: NeurataHome) -> Check:
     raw = _meta(home, "skipped")
     skipped = json.loads(raw) if raw else []
     if skipped:
@@ -138,7 +138,7 @@ def _skipped(home: ArmariumHome) -> Check:
     return Check("skipped-files", "ok", "nenhum")
 
 
-def _lock(home: ArmariumHome) -> Check:
+def _lock(home: NeurataHome) -> Check:
     lock = home.root / "index.lock"
     if not lock.exists():
         return Check("lock", "ok", "livre")
@@ -150,5 +150,5 @@ def _lock(home: ArmariumHome) -> Check:
                      "reindex em andamento? aguarde ou investigue")
     except (ValueError, OSError):
         return Check("lock", "warn", "lock STALE (processo morto)",
-                     "remova index.lock ou rode `armarium reindex` "
+                     "remova index.lock ou rode `neurata reindex` "
                      "(toma posse de lock stale)")

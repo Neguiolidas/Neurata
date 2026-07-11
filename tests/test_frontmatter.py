@@ -1,7 +1,7 @@
 """tests/test_frontmatter.py"""
 import pytest
 
-from armarium.frontmatter import FrontmatterError, parse, serialize
+from neurata.frontmatter import FrontmatterError, parse, serialize
 
 
 def test_roundtrip():

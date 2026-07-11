@@ -1,13 +1,13 @@
 """tests/test_deposit.py"""
 import pytest
 
-from armarium.deposit import DepositError, deposit
-from armarium.frontmatter import parse
-from armarium.home import ArmariumHome
+from neurata.deposit import DepositError, deposit
+from neurata.frontmatter import parse
+from neurata.home import NeurataHome
 
 
 def _home(tmp_path):
-    home = ArmariumHome(tmp_path)
+    home = NeurataHome(tmp_path)
     home.init()
     return home
 
@@ -100,7 +100,7 @@ def test_multiline_title_is_sanitized_and_frontmatter_reparses(tmp_path):
 
 
 def test_git_envelope_flattened_in_frontmatter_nested_in_log(tmp_path):
-    # Rodar do root do repo Armarium dá git context de graça no envelope.
+    # Rodar do root do repo Neurata dá git context de graça no envelope.
     home = _home(tmp_path)
     rec = deposit(home, "conteúdo com git context")
     meta, _ = parse(list(home.inbox.glob("*.md"))[0].read_text())

@@ -1,4 +1,4 @@
-"""armarium/ulid.py — ULID stdlib-only (spec Crockford base32)."""
+"""neurata/ulid.py — ULID stdlib-only (spec Crockford base32)."""
 import os
 import time
 

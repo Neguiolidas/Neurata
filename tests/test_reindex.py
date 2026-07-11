@@ -3,14 +3,14 @@ import os
 
 import pytest
 
-from armarium.deposit import deposit
-from armarium.home import ArmariumHome
-from armarium.indexdb import connect
-from armarium.reindex import reindex
+from neurata.deposit import deposit
+from neurata.home import NeurataHome
+from neurata.indexdb import connect
+from neurata.reindex import reindex
 
 
 def _home(tmp_path):
-    home = ArmariumHome(tmp_path)
+    home = NeurataHome(tmp_path)
     home.init()
     return home
 

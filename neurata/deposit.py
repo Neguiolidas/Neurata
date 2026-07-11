@@ -1,13 +1,13 @@
-"""armarium/deposit.py — captura crua → inbox. Nunca bloqueia por qualidade."""
+"""neurata/deposit.py — captura crua → inbox. Nunca bloqueia por qualidade."""
 import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 
-from armarium.envelope import capture
-from armarium.frontmatter import serialize
-from armarium.home import ArmariumHome
-from armarium.textnorm import slugify
-from armarium.ulid import new_ulid
+from neurata.envelope import capture
+from neurata.frontmatter import serialize
+from neurata.home import NeurataHome
+from neurata.textnorm import slugify
+from neurata.ulid import new_ulid
 
 MAX_BYTES = 2_000_000
 
@@ -16,7 +16,7 @@ class DepositError(ValueError):
     pass
 
 
-def deposit(home: ArmariumHome, content: "str | None" = None,
+def deposit(home: NeurataHome, content: "str | None" = None,
             file: "Path | None" = None, *, title: "str | None" = None,
             dtype: str = "note", denv: str = "generic",
             agent: "str | None" = None,
@@ -93,7 +93,7 @@ def _flatten(envelope: dict) -> dict:
     return flat
 
 
-def _find_previous(home: ArmariumHome, content_hash: str) -> "dict | None":
+def _find_previous(home: NeurataHome, content_hash: str) -> "dict | None":
     for rec in home.read_log("deposits"):
         if rec.get("hash") != content_hash or rec.get("action") != "created":
             continue

@@ -1,4 +1,4 @@
-"""armarium/envelope.py — proveniência best-effort do depósito."""
+"""neurata/envelope.py — proveniência best-effort do depósito."""
 import socket
 import subprocess
 from datetime import datetime, timezone

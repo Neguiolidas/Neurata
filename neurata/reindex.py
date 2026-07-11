@@ -1,16 +1,16 @@
-"""armarium/reindex.py — rebuild total do índice a partir dos arquivos."""
+"""neurata/reindex.py — rebuild total do índice a partir dos arquivos."""
 import json
 import sqlite3
 import time
 from datetime import datetime, timezone
 
-from armarium.frontmatter import FrontmatterError, parse
-from armarium.home import ArmariumHome
-from armarium.indexdb import IndexLock, connect, create_schema, drop_schema
-from armarium.textnorm import normalize
+from neurata.frontmatter import FrontmatterError, parse
+from neurata.home import NeurataHome
+from neurata.indexdb import IndexLock, connect, create_schema, drop_schema
+from neurata.textnorm import normalize
 
 
-def reindex(home: ArmariumHome) -> dict:
+def reindex(home: NeurataHome) -> dict:
     start = time.monotonic()
     skipped: list[dict] = []
     indexed = 0

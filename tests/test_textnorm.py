@@ -1,5 +1,5 @@
 """tests/test_textnorm.py"""
-from armarium.textnorm import normalize, slugify, split_identifiers, strip_accents
+from neurata.textnorm import normalize, slugify, split_identifiers, strip_accents
 
 
 def test_strip_accents_pt():
@@ -7,7 +7,7 @@ def test_strip_accents_pt():
 
 
 def test_split_identifiers():
-    assert split_identifiers("curate_tick e ArmariumHome") == "curate tick e Armarium Home"
+    assert split_identifiers("curate_tick e NeurataHome") == "curate tick e Neurata Home"
 
 
 def test_normalize_pipeline():

@@ -1,4 +1,4 @@
-"""armarium/home.py — layout de storage e config. Arquivos são a verdade."""
+"""neurata/home.py — layout de storage e config. Arquivos são a verdade."""
 import json
 import os
 from pathlib import Path
@@ -9,9 +9,9 @@ CONTRACT_VERSION = 1
 _DIRS = ("library", "inbox", "archive", "quarantine", "logs")
 
 
-class ArmariumHome:
+class NeurataHome:
     def __init__(self, root: "Path | str | None" = None):
-        raw = root or os.environ.get("ARMARIUM_HOME") or "~/.armarium"
+        raw = root or os.environ.get("NEURATA_HOME") or "~/.neurata"
         self.root = Path(raw).expanduser()
         self.library = self.root / "library"
         self.inbox = self.root / "inbox"

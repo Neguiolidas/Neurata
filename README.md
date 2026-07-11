@@ -1,11 +1,11 @@
-# Armarium
+# Neurata
 
-> *Claustrum sine armario quasi castrum sine armamentario.*
-> — "A cloister without an armarium is like a fortress without an armoury."
+> The living memory of your environment: deposit raw, curate quietly,
+> retrieve at the right moment.
 
 The living knowledge layer for an agent's **environment** (CLI, IDE,
 framework). Companion to [Conscio](https://github.com/Neguiolidas/Conscio),
-which minds the agent itself; Armarium minds the agent's world: skills,
+which minds the agent itself; Neurata minds the agent's world: skills,
 tools, docs, decisions — catalogued, curated, retrievable.
 
 **Principles**

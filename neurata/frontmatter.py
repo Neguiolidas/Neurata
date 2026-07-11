@@ -1,4 +1,4 @@
-"""armarium/frontmatter.py — YAML restrito (subset válido p/ Obsidian).
+"""neurata/frontmatter.py — YAML restrito (subset válido p/ Obsidian).
 
 Suporta: `k: v` (str), `k: [a, b]` (lista de str), `k:` + bloco indentado
 2 espaços (dict 1 nível). Valores com caracteres especiais são citados.

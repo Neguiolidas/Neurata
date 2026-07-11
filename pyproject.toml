@@ -3,8 +3,8 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "armarium"
-description = "The living knowledge layer for an agent's environment. Claustrum sine armario quasi castrum sine armamentario."
+name = "neurata"
+description = "The living knowledge layer for an agent's environment: deposit raw, curate quietly, retrieve at the right moment."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "AGPL-3.0-or-later" }
@@ -16,11 +16,11 @@ dependencies = []
 dev = ["pytest", "ruff", "mypy"]
 
 [project.scripts]
-armarium = "armarium.cli:main"
-arma = "armarium.cli:main"
+neurata = "neurata.cli:main"
+neu = "neurata.cli:main"
 
 [tool.setuptools]
-packages = ["armarium"]
+packages = ["neurata"]
 
 [tool.setuptools.dynamic]
-version = { attr = "armarium.__version__" }
+version = { attr = "neurata.__version__" }

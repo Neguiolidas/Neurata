@@ -1,14 +1,14 @@
-"""armarium/cli.py — fachada CLI. Contrato JSON versionado."""
+"""neurata/cli.py — fachada CLI. Contrato JSON versionado."""
 import argparse
 import dataclasses
 import json
 import sys
 
-from armarium.deposit import DepositError, deposit
-from armarium.doctor import exit_code, run_checks
-from armarium.home import CONTRACT_VERSION, ArmariumHome
-from armarium.indexdb import FTS5MissingError, LockHeldError
-from armarium.reindex import reindex
+from neurata.deposit import DepositError, deposit
+from neurata.doctor import exit_code, run_checks
+from neurata.home import CONTRACT_VERSION, NeurataHome
+from neurata.indexdb import FTS5MissingError, LockHeldError
+from neurata.reindex import reindex
 
 
 def main(argv: "list[str] | None" = None) -> int:
@@ -18,7 +18,7 @@ def main(argv: "list[str] | None" = None) -> int:
         parser.print_help()
         return 2
     try:
-        home = ArmariumHome()
+        home = NeurataHome()
         home.init()
         result, rc = _dispatch(args, home)
     except (DepositError, FTS5MissingError, LockHeldError, OSError) as exc:
@@ -31,7 +31,7 @@ def main(argv: "list[str] | None" = None) -> int:
     return rc
 
 
-def _dispatch(args: argparse.Namespace, home: ArmariumHome) -> tuple[dict, int]:
+def _dispatch(args: argparse.Namespace, home: NeurataHome) -> tuple[dict, int]:
     if args.command == "deposit":
         text = args.text
         if text == "-":
@@ -52,8 +52,8 @@ def _dispatch(args: argparse.Namespace, home: ArmariumHome) -> tuple[dict, int]:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="armarium",
-        description="Armarium — the living knowledge layer for an agent's "
+        prog="neurata",
+        description="Neurata — the living knowledge layer for an agent's "
                     "environment.")
     parser.add_argument("--json", action="store_true",
                         help="saída JSON (contrato versionado)")
@@ -70,7 +70,7 @@ def _build_parser() -> argparse.ArgumentParser:
     dep.add_argument("--session", default=None)
     # default=SUPPRESS: a flag do subparser só toca o namespace quando
     # presente — senão o default False do subparser sobrescreveria o
-    # --json global já parseado (`armarium --json deposit x`).
+    # --json global já parseado (`neurata --json deposit x`).
     dep.add_argument("--json", action="store_true",
                      default=argparse.SUPPRESS)
 

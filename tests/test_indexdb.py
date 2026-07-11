@@ -1,15 +1,15 @@
 """tests/test_indexdb.py"""
 import pytest
 
-from armarium.home import ArmariumHome
-from armarium.indexdb import (
+from neurata.home import NeurataHome
+from neurata.indexdb import (
     IndexLock, LockHeldError, connect, create_schema, drop_schema,
     ensure_fts5, fts5_available,
 )
 
 
 def _home(tmp_path):
-    home = ArmariumHome(tmp_path)
+    home = NeurataHome(tmp_path)
     home.init()
     return home
 

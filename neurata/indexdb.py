@@ -1,11 +1,11 @@
-"""armarium/indexdb.py — índice sqlite descartável. FTS5 = requisito duro."""
+"""neurata/indexdb.py — índice sqlite descartável. FTS5 = requisito duro."""
 import os
 import sqlite3
 
-from armarium.home import ArmariumHome
+from neurata.home import NeurataHome
 
 _REMEDY = (
-    "FTS5 indisponível no sqlite deste Python. O Armarium exige FTS5 "
+    "FTS5 indisponível no sqlite deste Python. O Neurata exige FTS5 "
     "(flag de compilação do sqlite do sistema). Remediação: instale um "
     "Python/sqlite com FTS5 (Ubuntu/Debian/Homebrew padrão têm; "
     "`python3 -c \"import sqlite3; print(sqlite3.sqlite_version)\"` e "
@@ -45,7 +45,7 @@ class LockHeldError(RuntimeError):
     pass
 
 
-def connect(home: ArmariumHome) -> sqlite3.Connection:
+def connect(home: NeurataHome) -> sqlite3.Connection:
     con = sqlite3.connect(home.index_path)
     con.execute("PRAGMA journal_mode=WAL")
     ensure_fts5(con)
@@ -81,7 +81,7 @@ def drop_schema(con: sqlite3.Connection) -> None:
 
 
 class IndexLock:
-    def __init__(self, home: ArmariumHome):
+    def __init__(self, home: NeurataHome):
         self.path = home.root / "index.lock"
 
     def __enter__(self) -> "IndexLock":

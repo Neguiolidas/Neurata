@@ -1,7 +1,7 @@
 """tests/test_ulid.py"""
 import re
 
-from armarium.ulid import new_ulid
+from neurata.ulid import new_ulid
 
 
 def test_shape_and_charset():

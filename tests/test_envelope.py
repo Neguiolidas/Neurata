@@ -1,7 +1,7 @@
 """tests/test_envelope.py"""
 import subprocess
 
-from armarium.envelope import capture
+from neurata.envelope import capture
 
 
 def test_always_present_fields(tmp_path):

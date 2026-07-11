@@ -1,17 +1,17 @@
 """tests/test_home.py"""
 import json
 
-from armarium.home import CONTRACT_VERSION, SCHEMA_VERSION, ArmariumHome
+from neurata.home import CONTRACT_VERSION, SCHEMA_VERSION, NeurataHome
 
 
 def test_env_var_resolution(tmp_path, monkeypatch):
-    monkeypatch.setenv("ARMARIUM_HOME", str(tmp_path / "h"))
-    home = ArmariumHome()
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path / "h"))
+    home = NeurataHome()
     assert home.root == tmp_path / "h"
 
 
 def test_init_creates_layout(tmp_path):
-    home = ArmariumHome(tmp_path / "a")
+    home = NeurataHome(tmp_path / "a")
     home.init()
     for d in (home.library, home.inbox, home.archive, home.quarantine, home.logs):
         assert d.is_dir()
@@ -21,7 +21,7 @@ def test_init_creates_layout(tmp_path):
 
 
 def test_init_idempotent_preserves_config(tmp_path):
-    home = ArmariumHome(tmp_path)
+    home = NeurataHome(tmp_path)
     home.init()
     cfg = json.loads(home.config_path.read_text())
     cfg["custom"] = "keep"
@@ -31,7 +31,7 @@ def test_init_idempotent_preserves_config(tmp_path):
 
 
 def test_append_and_read_log(tmp_path):
-    home = ArmariumHome(tmp_path)
+    home = NeurataHome(tmp_path)
     home.init()
     home.append_log("deposits", {"hash": "abc"})
     home.append_log("deposits", {"hash": "def"})

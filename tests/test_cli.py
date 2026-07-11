@@ -1,11 +1,11 @@
 """tests/test_cli.py"""
 import json
 
-from armarium.cli import main
+from neurata.cli import main
 
 
 def test_deposit_json_roundtrip(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("ARMARIUM_HOME", str(tmp_path))
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
     rc = main(["deposit", "conhecimento novo", "--title", "T", "--json"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
@@ -17,7 +17,7 @@ def test_deposit_json_roundtrip(tmp_path, monkeypatch, capsys):
 
 def test_deposit_stdin(tmp_path, monkeypatch, capsys):
     import io
-    monkeypatch.setenv("ARMARIUM_HOME", str(tmp_path))
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
     monkeypatch.setattr("sys.stdin", io.StringIO("via stdin"))
     rc = main(["deposit", "-", "--json"])
     assert rc == 0
@@ -25,7 +25,7 @@ def test_deposit_stdin(tmp_path, monkeypatch, capsys):
 
 
 def test_reindex_and_doctor_flow(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("ARMARIUM_HOME", str(tmp_path))
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
     main(["deposit", "algo"])
     capsys.readouterr()
     rc = main(["reindex", "--json"])
@@ -39,7 +39,7 @@ def test_reindex_and_doctor_flow(tmp_path, monkeypatch, capsys):
 
 
 def test_error_envelope(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("ARMARIUM_HOME", str(tmp_path))
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
     rc = main(["deposit", "--file", str(tmp_path / "nada.md"), "--json"])
     assert rc == 2
     out = json.loads(capsys.readouterr().out)
@@ -48,14 +48,14 @@ def test_error_envelope(tmp_path, monkeypatch, capsys):
 
 
 def test_human_output(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("ARMARIUM_HOME", str(tmp_path))
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
     rc = main(["deposit", "algo humano", "--title", "Nota"])
     assert rc == 0
     assert "created" in capsys.readouterr().out
 
 
 def test_json_flag_global_position(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("ARMARIUM_HOME", str(tmp_path))
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
     rc = main(["--json", "deposit", "x"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
@@ -67,12 +67,12 @@ def test_json_flag_global_position(tmp_path, monkeypatch, capsys):
 
 def test_unwritable_home_stays_inside_error_envelope(
         tmp_path, monkeypatch, capsys):
-    # ARMARIUM_HOME apontando p/ um arquivo (não diretório) faz
+    # NEURATA_HOME apontando p/ um arquivo (não diretório) faz
     # home.init() levantar NotADirectoryError/OSError ao tentar mkdir.
     # Isso precisa ficar dentro do boundary de erro, não vazar traceback.
     impossible = tmp_path / "file"
     impossible.write_text("sou um arquivo, não um diretório")
-    monkeypatch.setenv("ARMARIUM_HOME", str(impossible))
+    monkeypatch.setenv("NEURATA_HOME", str(impossible))
 
     rc = main(["--json", "deposit", "x"])
 
@@ -84,7 +84,7 @@ def test_unwritable_home_stays_inside_error_envelope(
 
 
 def test_doctor_json_envelope_ok_reflects_rc(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("ARMARIUM_HOME", str(tmp_path))
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
     main(["deposit", "algo"])
     main(["reindex"])
     capsys.readouterr()
@@ -109,12 +109,12 @@ def test_doctor_json_envelope_ok_reflects_rc(tmp_path, monkeypatch, capsys):
 
 def test_unexpected_exception_never_leaks_traceback(
         tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("ARMARIUM_HOME", str(tmp_path))
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
 
     def boom(*a, **kw):
         raise RuntimeError("boom")
 
-    monkeypatch.setattr("armarium.cli.deposit", boom)
+    monkeypatch.setattr("neurata.cli.deposit", boom)
     rc = main(["deposit", "x", "--json"])
     assert rc == 2
     captured = capsys.readouterr()

@@ -1,4 +1,4 @@
-"""armarium/textnorm.py — normalização PT-aware p/ index e slugs."""
+"""neurata/textnorm.py — normalização PT-aware p/ index e slugs."""
 import re
 import unicodedata
 

@@ -4,13 +4,13 @@ import sqlite3
 import time
 from datetime import datetime
 
-from armarium.doctor import exit_code, run_checks
-from armarium.home import ArmariumHome
-from armarium.reindex import reindex
+from neurata.doctor import exit_code, run_checks
+from neurata.home import NeurataHome
+from neurata.reindex import reindex
 
 
 def _home(tmp_path):
-    home = ArmariumHome(tmp_path)
+    home = NeurataHome(tmp_path)
     home.init()
     return home
 
@@ -37,7 +37,7 @@ def test_missing_index_warns_with_remedy(tmp_path):
 
 
 def test_uninitialized_home_fails(tmp_path):
-    home = ArmariumHome(tmp_path / "nao-existe")
+    home = NeurataHome(tmp_path / "nao-existe")
     checks = _by_name(run_checks(home))
     assert checks["home-layout"].status == "fail"
     assert exit_code(run_checks(home)) == 2
