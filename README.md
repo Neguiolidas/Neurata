@@ -1,7 +1,10 @@
-# Neurata
+<p align="center">
+  <img src="docs/assets/neurata-banner.svg" alt="Neurata — the living memory of your environment: deposit raw, curate quietly, retrieve at the right moment" width="820">
+</p>
 
-> The living memory of your environment: deposit raw, curate quietly,
-> retrieve at the right moment.
+<p align="center">
+  <b>Deposit raw, curate quietly, retrieve at the right moment.</b>
+</p>
 
 The living knowledge layer for an agent's **environment** (CLI, IDE,
 framework). Companion to [Conscio](https://github.com/Neguiolidas/Conscio),
