@@ -24,9 +24,8 @@ def run_checks(home: ArmariumHome) -> list[Check]:
     checks.append(_config(home))
     checks.append(_fts5(home))
     checks.append(_index(home))
-    if checks[-1].status == "ok":
-        checks.append(_freshness(home))
-        checks.append(_skipped(home))
+    checks.append(_freshness(home))
+    checks.append(_skipped(home))
     checks.append(_lock(home))
     return checks
 
@@ -85,16 +84,27 @@ def _index(home: ArmariumHome) -> Check:
     if not home.index_path.exists():
         return Check("index", "warn", "index.db ausente",
                      "rode `armarium reindex`")
+    con = sqlite3.connect(home.index_path)
+    try:
+        con.execute("SELECT 1 FROM sqlite_master LIMIT 1").fetchone()
+    except sqlite3.DatabaseError:
+        return Check("index", "fail", "index.db corrompido (não é sqlite)",
+                     "apague index.db e rode `armarium reindex` "
+                     "(o índice é cache descartável)")
+    finally:
+        con.close()
     return Check("index", "ok", str(home.index_path))
 
 
 def _meta(home: ArmariumHome, key: str) -> "str | None":
+    if not home.index_path.exists():
+        return None
     con = sqlite3.connect(home.index_path)
     try:
         row = con.execute("SELECT value FROM meta WHERE key=?",
                           (key,)).fetchone()
         return row[0] if row else None
-    except sqlite3.OperationalError:
+    except sqlite3.DatabaseError:  # cobre OperationalError e corrupção
         return None
     finally:
         con.close()
@@ -106,9 +116,11 @@ def _freshness(home: ArmariumHome) -> Check:
         return Check("index-freshness", "warn", "sem last_reindex",
                      "rode `armarium reindex`")
     last_ts = datetime.fromisoformat(last).timestamp()
+    # last_reindex tem resolução de segundos — floor dos dois lados
     stale = [str(p.relative_to(home.root))
              for base in (home.library, home.inbox)
-             for p in base.rglob("*.md") if p.stat().st_mtime > last_ts]
+             for p in base.rglob("*.md")
+             if int(p.stat().st_mtime) > int(last_ts)]
     if stale:
         return Check("index-freshness", "warn",
                      f"{len(stale)} arquivo(s) mais novos que o índice",

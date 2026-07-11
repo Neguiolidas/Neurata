@@ -1,5 +1,8 @@
 """tests/test_doctor.py"""
+import os
+import sqlite3
 import time
+from datetime import datetime
 
 from armarium.doctor import exit_code, run_checks
 from armarium.home import ArmariumHome
@@ -64,3 +67,30 @@ def test_stale_lock_warns(tmp_path):
     (home.root / "index.lock").write_text("999999999")
     checks = _by_name(run_checks(home))
     assert checks["lock"].status == "warn"
+
+
+def test_corrupt_index_fails_cleanly(tmp_path):
+    home = _home(tmp_path)
+    home.index_path.write_bytes(b"\x00lixo que nao e sqlite\xff\xfe")
+    checks = run_checks(home)  # nao pode explodir
+    assert len(checks) == 8  # todos os checks presentes
+    by = _by_name(checks)
+    assert by["index"].status == "fail"
+    assert by["index"].remedy
+    assert exit_code(checks) == 2
+
+
+def test_freshness_same_second_not_stale(tmp_path):
+    home = _home(tmp_path)
+    path = home.library / "mesmo-segundo.md"
+    path.write_text("---\nid: 01Y\ntitle: T\n---\nb\n")
+    reindex(home)
+    con = sqlite3.connect(home.index_path)
+    last = con.execute(
+        "SELECT value FROM meta WHERE key='last_reindex'").fetchone()[0]
+    con.close()
+    last_ts = datetime.fromisoformat(last).timestamp()
+    # mtime fracionalmente depois, mas no MESMO segundo do last_reindex
+    os.utime(path, (last_ts + 0.9, last_ts + 0.9))
+    checks = _by_name(run_checks(home))
+    assert checks["index-freshness"].status == "ok"
