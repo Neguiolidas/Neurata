@@ -18,7 +18,7 @@ def split_identifiers(text: str) -> str:
 
 
 def normalize(text: str) -> str:
-    out = strip_accents(split_identifiers(text)).lower()
+    out = split_identifiers(strip_accents(text)).lower()
     out = _NONALNUM.sub(" ", out)
     return _WS.sub(" ", out).strip()
 

@@ -14,6 +14,11 @@ def test_normalize_pipeline():
     assert normalize("Compactação do curate_tick!") == "compactacao do curate tick"
 
 
+def test_normalize_camel_boundary_with_accents():
+    assert normalize("SeçãoÍndice") == "secao indice"
+    assert normalize("caféTest") == "cafe test"
+
+
 def test_slugify():
     assert slugify("Decisão: Motor Híbrido (v1)") == "decisao-motor-hibrido-v1"
     assert slugify("///") == "untitled"
