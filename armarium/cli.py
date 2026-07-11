@@ -1,0 +1,101 @@
+"""armarium/cli.py — fachada CLI. Contrato JSON versionado."""
+import argparse
+import dataclasses
+import json
+import sys
+
+from armarium.deposit import DepositError, deposit
+from armarium.doctor import exit_code, run_checks
+from armarium.home import CONTRACT_VERSION, ArmariumHome
+from armarium.indexdb import FTS5MissingError, LockHeldError
+from armarium.reindex import reindex
+
+
+def main(argv: "list[str] | None" = None) -> int:
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if not getattr(args, "command", None):
+        parser.print_help()
+        return 2
+    home = ArmariumHome()
+    home.init()
+    try:
+        result, rc = _dispatch(args, home)
+    except (DepositError, FTS5MissingError, LockHeldError, OSError) as exc:
+        _emit_error(args, exc)
+        return 2
+    _emit(args, result)
+    return rc
+
+
+def _dispatch(args: argparse.Namespace, home: ArmariumHome) -> tuple[dict, int]:
+    if args.command == "deposit":
+        text = args.text
+        if text == "-":
+            text = sys.stdin.read()
+        result = deposit(home, content=text,
+                         file=args.file, title=args.title, dtype=args.type,
+                         denv=args.env, agent=args.agent,
+                         session=args.session)
+        return result, 0
+    if args.command == "reindex":
+        return reindex(home), 0
+    if args.command == "doctor":
+        checks = run_checks(home)
+        return ({"checks": [dataclasses.asdict(c) for c in checks]},
+                exit_code(checks))
+    raise AssertionError(f"comando desconhecido: {args.command}")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="armarium",
+        description="Armarium — the living knowledge layer for an agent's "
+                    "environment.")
+    sub = parser.add_subparsers(dest="command")
+
+    dep = sub.add_parser("deposit", help="captura crua → inbox")
+    dep.add_argument("text", nargs="?", default=None,
+                     help="conteúdo (ou '-' para stdin)")
+    dep.add_argument("--file", type=str, default=None)
+    dep.add_argument("--title", default=None)
+    dep.add_argument("--type", default="note")
+    dep.add_argument("--env", default="generic")
+    dep.add_argument("--agent", default=None)
+    dep.add_argument("--session", default=None)
+    dep.add_argument("--json", action="store_true")
+
+    for name, hlp in (("reindex", "rebuild total do índice"),
+                      ("doctor", "self-check com remediação")):
+        p = sub.add_parser(name, help=hlp)
+        p.add_argument("--json", action="store_true")
+    return parser
+
+
+def _emit(args: argparse.Namespace, result: dict) -> None:
+    if getattr(args, "json", False):
+        print(json.dumps({"contract_version": CONTRACT_VERSION, "ok": True,
+                          "command": args.command, "result": result},
+                         ensure_ascii=False))
+        return
+    if args.command == "doctor":
+        for c in result["checks"]:
+            mark = {"ok": "✓", "warn": "!", "fail": "✗"}[c["status"]]
+            line = f"{mark} {c['name']}: {c['detail']}"
+            if c["remedy"]:
+                line += f" — {c['remedy']}"
+            print(line)
+        return
+    print(" ".join(f"{k}={v}" for k, v in result.items()
+                   if not isinstance(v, (list, dict))))
+
+
+def _emit_error(args: argparse.Namespace, exc: Exception) -> None:
+    if getattr(args, "json", False):
+        print(json.dumps({"contract_version": CONTRACT_VERSION, "ok": False,
+                          "command": args.command,
+                          "error": {"code": type(exc).__name__,
+                                    "message": str(exc)}},
+                         ensure_ascii=False))
+    else:
+        print(f"erro ({type(exc).__name__}): {exc}", file=sys.stderr)
