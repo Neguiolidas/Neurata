@@ -52,3 +52,32 @@ def test_human_output(tmp_path, monkeypatch, capsys):
     rc = main(["deposit", "algo humano", "--title", "Nota"])
     assert rc == 0
     assert "created" in capsys.readouterr().out
+
+
+def test_json_flag_global_position(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ARMARIUM_HOME", str(tmp_path))
+    rc = main(["--json", "deposit", "x"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["contract_version"] == 1
+    assert out["ok"] is True
+    assert out["command"] == "deposit"
+    assert out["result"]["action"] == "created"
+
+
+def test_unexpected_exception_never_leaks_traceback(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ARMARIUM_HOME", str(tmp_path))
+
+    def boom(*a, **kw):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr("armarium.cli.deposit", boom)
+    rc = main(["deposit", "x", "--json"])
+    assert rc == 2
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert out["ok"] is False
+    assert out["error"]["code"] == "RuntimeError"
+    assert out["error"]["message"] == "boom"
+    assert "Traceback" not in captured.out + captured.err

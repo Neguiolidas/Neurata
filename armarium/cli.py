@@ -24,6 +24,9 @@ def main(argv: "list[str] | None" = None) -> int:
     except (DepositError, FTS5MissingError, LockHeldError, OSError) as exc:
         _emit_error(args, exc)
         return 2
+    except Exception as exc:  # nunca vaza traceback pela CLI
+        _emit_error(args, exc)
+        return 2
     _emit(args, result)
     return rc
 
@@ -52,6 +55,8 @@ def _build_parser() -> argparse.ArgumentParser:
         prog="armarium",
         description="Armarium — the living knowledge layer for an agent's "
                     "environment.")
+    parser.add_argument("--json", action="store_true",
+                        help="saída JSON (contrato versionado)")
     sub = parser.add_subparsers(dest="command")
 
     dep = sub.add_parser("deposit", help="captura crua → inbox")
@@ -63,12 +68,17 @@ def _build_parser() -> argparse.ArgumentParser:
     dep.add_argument("--env", default="generic")
     dep.add_argument("--agent", default=None)
     dep.add_argument("--session", default=None)
-    dep.add_argument("--json", action="store_true")
+    # default=SUPPRESS: a flag do subparser só toca o namespace quando
+    # presente — senão o default False do subparser sobrescreveria o
+    # --json global já parseado (`armarium --json deposit x`).
+    dep.add_argument("--json", action="store_true",
+                     default=argparse.SUPPRESS)
 
     for name, hlp in (("reindex", "rebuild total do índice"),
                       ("doctor", "self-check com remediação")):
         p = sub.add_parser(name, help=hlp)
-        p.add_argument("--json", action="store_true")
+        p.add_argument("--json", action="store_true",
+                       default=argparse.SUPPRESS)
     return parser
 
 
