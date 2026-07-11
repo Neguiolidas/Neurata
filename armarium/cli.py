@@ -17,9 +17,9 @@ def main(argv: "list[str] | None" = None) -> int:
     if not getattr(args, "command", None):
         parser.print_help()
         return 2
-    home = ArmariumHome()
-    home.init()
     try:
+        home = ArmariumHome()
+        home.init()
         result, rc = _dispatch(args, home)
     except (DepositError, FTS5MissingError, LockHeldError, OSError) as exc:
         _emit_error(args, exc)
@@ -27,7 +27,7 @@ def main(argv: "list[str] | None" = None) -> int:
     except Exception as exc:  # nunca vaza traceback pela CLI
         _emit_error(args, exc)
         return 2
-    _emit(args, result)
+    _emit(args, result, rc)
     return rc
 
 
@@ -82,9 +82,13 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _emit(args: argparse.Namespace, result: dict) -> None:
+def _emit(args: argparse.Namespace, result: dict, rc: int = 0) -> None:
     if getattr(args, "json", False):
-        print(json.dumps({"contract_version": CONTRACT_VERSION, "ok": True,
+        # doctor pode terminar rc != 0 sem lançar exceção (checks "fail");
+        # nesse caso o envelope precisa refletir a falha em `ok`, não só
+        # no exit code — senão consumidores que checam só `ok` leem êxito.
+        ok = rc == 0 if args.command == "doctor" else True
+        print(json.dumps({"contract_version": CONTRACT_VERSION, "ok": ok,
                           "command": args.command, "result": result},
                          ensure_ascii=False))
         return

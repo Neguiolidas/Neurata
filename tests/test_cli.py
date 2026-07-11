@@ -65,6 +65,48 @@ def test_json_flag_global_position(tmp_path, monkeypatch, capsys):
     assert out["result"]["action"] == "created"
 
 
+def test_unwritable_home_stays_inside_error_envelope(
+        tmp_path, monkeypatch, capsys):
+    # ARMARIUM_HOME apontando p/ um arquivo (não diretório) faz
+    # home.init() levantar NotADirectoryError/OSError ao tentar mkdir.
+    # Isso precisa ficar dentro do boundary de erro, não vazar traceback.
+    impossible = tmp_path / "file"
+    impossible.write_text("sou um arquivo, não um diretório")
+    monkeypatch.setenv("ARMARIUM_HOME", str(impossible))
+
+    rc = main(["--json", "deposit", "x"])
+
+    assert rc == 2
+    captured = capsys.readouterr()
+    out = json.loads(captured.out)
+    assert out["ok"] is False
+    assert "Traceback" not in captured.out + captured.err
+
+
+def test_doctor_json_envelope_ok_reflects_rc(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("ARMARIUM_HOME", str(tmp_path))
+    main(["deposit", "algo"])
+    main(["reindex"])
+    capsys.readouterr()
+
+    # Doctor tudo ok -> envelope ok:true.
+    rc_ok = main(["doctor", "--json"])
+    out_ok = json.loads(capsys.readouterr().out)
+    assert rc_ok == 0
+    assert out_ok["ok"] is True
+
+    # Corrompe index.db para forçar check "fail" -> rc==2, envelope
+    # precisa refletir ok:false (antes do fix ficava hardcoded true).
+    home_index = tmp_path / "index.db"
+    home_index.write_bytes(b"isto nao e um sqlite valido")
+
+    rc_fail = main(["doctor", "--json"])
+    out_fail = json.loads(capsys.readouterr().out)
+    assert rc_fail == 2
+    assert out_fail["ok"] is False
+    assert out_fail["result"]["checks"]
+
+
 def test_unexpected_exception_never_leaks_traceback(
         tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("ARMARIUM_HOME", str(tmp_path))
