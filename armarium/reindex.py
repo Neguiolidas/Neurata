@@ -16,32 +16,44 @@ def reindex(home: ArmariumHome) -> dict:
     indexed = 0
     with IndexLock(home):
         con = connect(home)
-        drop_schema(con)
-        create_schema(con)
-        for location, base in (("library", home.library),
-                               ("inbox", home.inbox)):
-            for path in sorted(base.rglob("*.md")):
-                rel = str(path.relative_to(home.root))
-                try:
-                    meta, body = parse(path.read_text(encoding="utf-8"))
-                except (FrontmatterError, UnicodeDecodeError):
-                    skipped.append({"path": rel, "reason": "unparseable"})
-                    continue
-                if not meta.get("id"):
-                    skipped.append({"path": rel, "reason": "missing-id"})
-                    continue
-                try:
-                    _insert(con, meta, body, rel, location, path.stem)
-                    indexed += 1
-                except sqlite3.IntegrityError:
-                    skipped.append({"path": rel, "reason": "slug-collision"})
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-        con.execute("INSERT OR REPLACE INTO meta VALUES ('last_reindex', ?)",
-                    (now,))
-        con.execute("INSERT OR REPLACE INTO meta VALUES ('skipped', ?)",
-                    (json.dumps(skipped),))
-        con.commit()
-        con.close()
+        try:
+            drop_schema(con)
+            create_schema(con)
+            for location, base in (("library", home.library),
+                                   ("inbox", home.inbox)):
+                for path in sorted(base.rglob("*.md")):
+                    rel = str(path.relative_to(home.root))
+                    try:
+                        text = path.read_text(encoding="utf-8")
+                    except OSError:
+                        skipped.append({"path": rel, "reason": "unreadable"})
+                        continue
+                    except UnicodeDecodeError:
+                        skipped.append({"path": rel, "reason": "unparseable"})
+                        continue
+                    try:
+                        meta, body = parse(text)
+                    except FrontmatterError:
+                        skipped.append({"path": rel, "reason": "unparseable"})
+                        continue
+                    if not meta.get("id"):
+                        skipped.append({"path": rel, "reason": "missing-id"})
+                        continue
+                    try:
+                        _insert(con, meta, body, rel, location, path.stem)
+                        indexed += 1
+                    except sqlite3.IntegrityError:
+                        skipped.append({"path": rel,
+                                        "reason": "slug-collision"})
+            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            con.execute(
+                "INSERT OR REPLACE INTO meta VALUES ('last_reindex', ?)",
+                (now,))
+            con.execute("INSERT OR REPLACE INTO meta VALUES ('skipped', ?)",
+                        (json.dumps(skipped),))
+            con.commit()
+        finally:
+            con.close()
     return {"indexed": indexed, "skipped": skipped,
             "duration_ms": int((time.monotonic() - start) * 1000)}
 

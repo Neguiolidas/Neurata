@@ -1,4 +1,8 @@
 """tests/test_reindex.py"""
+import os
+
+import pytest
+
 from armarium.deposit import deposit
 from armarium.home import ArmariumHome
 from armarium.indexdb import connect
@@ -60,6 +64,27 @@ def test_slug_collision_skipped(tmp_path):
     result = reindex(home)
     assert result["indexed"] == 1
     assert result["skipped"][0]["reason"] == "slug-collision"
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root lê arquivos chmod 000")
+def test_unreadable_file_skipped_not_fatal(tmp_path):
+    home = _home(tmp_path)
+    (home.library / "ok.md").write_text("---\nid: 01OK\ntitle: Ok\n---\nc\n")
+    bad = home.library / "sem-leitura.md"
+    bad.write_text("---\nid: 01BAD\ntitle: Bad\n---\nx\n")
+    bad.chmod(0o000)
+    try:
+        result = reindex(home)
+    finally:
+        bad.chmod(0o644)
+    assert result["indexed"] == 1
+    assert len(result["skipped"]) == 1
+    assert result["skipped"][0]["reason"] == "unreadable"
+    assert result["skipped"][0]["path"] == "library/sem-leitura.md"
+    con = connect(home)
+    row = con.execute(
+        "SELECT value FROM meta WHERE key = 'last_reindex'").fetchone()
+    assert row is not None and row[0]
 
 
 def test_rebuild_is_idempotent(tmp_path):
