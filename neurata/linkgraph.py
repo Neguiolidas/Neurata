@@ -1,0 +1,52 @@
+"""neurata/linkgraph.py — grafo de [[links]] + Personalized PageRank.
+
+Adjacência não-direcionada (link = sinal de relação nos dois sentidos;
+backlink vale). PPR com lazy random walk (p ← ½p + ½step): mata a
+oscilação em grafos bipartidos (cadeias) que o power iteration puro tem
+com poucas iterações. Iteração em ordem sorted — determinístico bit a bit.
+"""
+import sqlite3
+
+ALPHA = 0.85
+ITERS = 10
+
+
+def load_adjacency(con: sqlite3.Connection) -> dict[int, set[int]]:
+    adj: dict[int, set[int]] = {}
+    for src, dst in con.execute("SELECT src_rowid, dst_rowid FROM edges"):
+        adj.setdefault(src, set()).add(dst)
+        adj.setdefault(dst, set()).add(src)
+    return adj
+
+
+def neighbors(adj: dict[int, set[int]], seeds: list[int]) -> set[int]:
+    out: set[int] = set()
+    for s in seeds:
+        out |= adj.get(s, set())
+    return out
+
+
+def ppr(adj: dict[int, set[int]], seeds: list[int],
+        alpha: float = ALPHA, iters: int = ITERS) -> dict[int, float]:
+    if not seeds or not adj:
+        return {}
+    teleport = 1.0 / len(seeds)
+    p: dict[int, float] = {s: teleport for s in sorted(set(seeds))}
+    seed_set = sorted(set(seeds))
+    for _ in range(iters):
+        nxt: dict[int, float] = {s: (1 - alpha) * teleport for s in seed_set}
+        for node in sorted(p):
+            mass = p[node]
+            nbrs = adj.get(node)
+            if not nbrs:
+                # dangling: devolve massa aos seeds (mantém soma ~1)
+                for s in seed_set:
+                    nxt[s] = nxt.get(s, 0.0) + alpha * mass * teleport
+                continue
+            share = alpha * mass / len(nbrs)
+            for nb in sorted(nbrs):
+                nxt[nb] = nxt.get(nb, 0.0) + share
+        # lazy walk: metade da massa fica parada
+        keys = sorted(set(p) | set(nxt))
+        p = {k: 0.5 * p.get(k, 0.0) + 0.5 * nxt.get(k, 0.0) for k in keys}
+    return p
