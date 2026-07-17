@@ -23,3 +23,9 @@ def test_slugify():
     assert slugify("Decisão: Motor Híbrido (v1)") == "decisao-motor-hibrido-v1"
     assert slugify("///") == "untitled"
     assert len(slugify("x" * 200)) <= 60
+
+
+def test_acronym_split():
+    assert normalize("HTTPServer") == "http server"
+    assert normalize("XMLHttpRequest") == "xml http request"
+    assert normalize("FTS5") == "fts5"  # sem minúscula → intacto

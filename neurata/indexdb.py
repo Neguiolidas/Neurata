@@ -12,8 +12,23 @@ _REMEDY = (
     "verifique a build)."
 )
 
+# Versão do schema do ÍNDICE (meta 'index_schema_version'); distinta do
+# SCHEMA_VERSION do config em home.py. Só o reindex grava; query checa.
+INDEX_SCHEMA_VERSION = 2
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS entry_tags(
+  entry_rowid INTEGER NOT NULL,
+  tag TEXT NOT NULL,
+  PRIMARY KEY(entry_rowid, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag);
+CREATE TABLE IF NOT EXISTS edges(
+  src_rowid INTEGER NOT NULL,
+  dst_rowid INTEGER NOT NULL,
+  PRIMARY KEY(src_rowid, dst_rowid)
+);
 CREATE TABLE IF NOT EXISTS entries(
   rowid INTEGER PRIMARY KEY,
   id TEXT NOT NULL UNIQUE,
@@ -32,7 +47,8 @@ CREATE TABLE IF NOT EXISTS entries(
 """
 
 _FTS = ("CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5("
-        "title, tags, body, title_norm, tags_norm, body_norm, "
+        "title, aliases, tags, body, "
+        "title_norm, aliases_norm, tags_norm, body_norm, "
         "prefix='2 3 4')")
 
 
@@ -75,6 +91,8 @@ def create_schema(con: sqlite3.Connection) -> None:
 
 def drop_schema(con: sqlite3.Connection) -> None:
     con.execute("DROP TABLE IF EXISTS entries_fts")
+    con.execute("DROP TABLE IF EXISTS edges")
+    con.execute("DROP TABLE IF EXISTS entry_tags")
     con.execute("DROP TABLE IF EXISTS entries")
     con.execute("DROP TABLE IF EXISTS meta")
     con.commit()

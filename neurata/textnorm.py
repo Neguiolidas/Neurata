@@ -3,6 +3,9 @@ import re
 import unicodedata
 
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+# acronym-split: fronteira entre run de maiúsculas e palavra Capitalizada
+# ("HTTPServer" → "HTTP Server"; "FTS5" fica intacto — sem minúscula).
+_ACRO = re.compile(r"(?<=[A-Z])(?=[A-Z][a-z])")
 _NONALNUM = re.compile(r"[^a-z0-9]+")
 _WS = re.compile(r"\s+")
 
@@ -14,7 +17,7 @@ def strip_accents(text: str) -> str:
 
 def split_identifiers(text: str) -> str:
     text = text.replace("_", " ").replace("-", " ")
-    return _CAMEL.sub(" ", text)
+    return _CAMEL.sub(" ", _ACRO.sub(" ", text))
 
 
 def normalize(text: str) -> str:

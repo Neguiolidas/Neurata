@@ -95,3 +95,48 @@ def test_rebuild_is_idempotent(tmp_path):
     assert result["indexed"] == 1
     con = connect(home)
     assert con.execute("SELECT COUNT(*) FROM entries").fetchone()[0] == 1
+
+
+def test_edges_and_link_counters(tmp_path):
+    home = _home(tmp_path)
+    (home.library / "a.md").write_text(
+        "---\nid: 01LA\ntitle: Alpha\naliases: [primeira]\n---\n"
+        "liga [[b]] e [[Beta#sec|texto]] e [[nada]] e [[dupe]].\n")
+    (home.library / "b.md").write_text(
+        "---\nid: 01LB\ntitle: Beta\n---\nvolta [[primeira]] e [[a]].\n")
+    (home.library / "c.md").write_text("---\nid: 01LC\ntitle: Dupe\n---\nx\n")
+    (home.library / "d.md").write_text("---\nid: 01LD\ntitle: Dupe\n---\ny\n")
+    result = reindex(home)
+    assert result["edges"] == 2  # a→b e b→a, deduplicados por par
+    assert result["unresolved_links"] == 1  # [[nada]]
+    assert result["ambiguous_links"] == 1   # [[dupe]] (2 títulos "Dupe")
+
+
+def test_id_collision_label(tmp_path):
+    home = _home(tmp_path)
+    (home.library / "um.md").write_text("---\nid: 01X\ntitle: Um\n---\nx\n")
+    (home.library / "dois.md").write_text("---\nid: 01X\ntitle: Dois\n---\ny\n")
+    result = reindex(home)
+    assert result["indexed"] == 1
+    assert result["skipped"][0]["reason"] == "id-collision"
+
+
+def test_entry_tags_lowercased(tmp_path):
+    home = _home(tmp_path)
+    (home.library / "t.md").write_text(
+        "---\nid: 01T\ntitle: T\ntags: [RAG, Busca]\n---\nx\n")
+    reindex(home)
+    con = connect(home)
+    tags = {r[0] for r in con.execute("SELECT tag FROM entry_tags")}
+    assert tags == {"rag", "busca"}
+
+
+def test_alias_indexed_and_searchable(tmp_path):
+    home = _home(tmp_path)
+    (home.library / "m.md").write_text(
+        "---\nid: 01M\ntitle: Motor\naliases: [hybrid-motor]\n---\nx\n")
+    reindex(home)
+    con = connect(home)
+    hits = con.execute("SELECT rowid FROM entries_fts WHERE entries_fts"
+                       " MATCH 'aliases:hybrid'").fetchall()
+    assert len(hits) == 1

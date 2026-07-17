@@ -1,19 +1,33 @@
-"""neurata/reindex.py — rebuild total do índice a partir dos arquivos."""
+"""neurata/reindex.py — rebuild total do índice a partir dos arquivos.
+
+2 passes: (1) entries + FTS + tags, guardando mapas slug/title/alias em
+memória; (2) resolução de [[wikilinks]] → edges. Link não-resolvido ou
+ambíguo é descartado e contado — determinístico, sem escolha arbitrária.
+"""
 import json
+import re
 import sqlite3
 import time
 from datetime import datetime, timezone
 
 from neurata.frontmatter import FrontmatterError, parse
 from neurata.home import NeurataHome
-from neurata.indexdb import IndexLock, connect, create_schema, drop_schema
+from neurata.indexdb import (INDEX_SCHEMA_VERSION, IndexLock, connect,
+                             create_schema, drop_schema)
 from neurata.textnorm import normalize
+
+_WIKILINK = re.compile(r"\[\[([^\[\]]+)\]\]")
+_AMBIG = -1  # sentinela: título/alias casando 2+ entries
 
 
 def reindex(home: NeurataHome) -> dict:
     start = time.monotonic()
     skipped: list[dict] = []
-    indexed = 0
+    indexed = edges = unresolved = ambiguous = 0
+    by_slug: dict[str, int] = {}
+    by_title: dict[str, int] = {}
+    by_alias: dict[str, int] = {}
+    bodies: dict[int, str] = {}
     with IndexLock(home):
         con = connect(home)
         try:
@@ -39,30 +53,100 @@ def reindex(home: NeurataHome) -> dict:
                     if not meta.get("id"):
                         skipped.append({"path": rel, "reason": "missing-id"})
                         continue
-                    try:
-                        _insert(con, meta, body, rel, location, path.stem)
-                        indexed += 1
-                    except sqlite3.IntegrityError:
-                        skipped.append({"path": rel,
-                                        "reason": "slug-collision"})
+                    slug = path.stem
+                    reason = _collision(con, str(meta["id"]), slug)
+                    if reason:
+                        skipped.append({"path": rel, "reason": reason})
+                        continue
+                    rowid = _insert(con, meta, body, rel, location, slug)
+                    indexed += 1
+                    by_slug[slug] = rowid
+                    _map_put(by_title, str(meta.get("title", slug)).lower(),
+                             rowid)
+                    for alias in _aliases(meta):
+                        _map_put(by_alias, alias.lower(), rowid)
+                    bodies[rowid] = body
+            for src in sorted(bodies):
+                for target in _link_targets(bodies[src]):
+                    dst = _resolve(target, by_slug, by_title, by_alias)
+                    if dst is None:
+                        unresolved += 1
+                    elif dst == _AMBIG:
+                        ambiguous += 1
+                    elif dst != src:
+                        cur = con.execute(
+                            "INSERT OR IGNORE INTO edges VALUES (?,?)",
+                            (src, dst))
+                        edges += cur.rowcount
             now = datetime.now(timezone.utc).isoformat(timespec="seconds")
             con.execute(
                 "INSERT OR REPLACE INTO meta VALUES ('last_reindex', ?)",
                 (now,))
             con.execute("INSERT OR REPLACE INTO meta VALUES ('skipped', ?)",
                         (json.dumps(skipped),))
+            con.execute("INSERT OR REPLACE INTO meta VALUES "
+                        "('index_schema_version', ?)",
+                        (str(INDEX_SCHEMA_VERSION),))
             con.commit()
         finally:
             con.close()
-    return {"indexed": indexed, "skipped": skipped,
+    return {"indexed": indexed, "skipped": skipped, "edges": edges,
+            "unresolved_links": unresolved, "ambiguous_links": ambiguous,
             "duration_ms": int((time.monotonic() - start) * 1000)}
 
 
+def _collision(con: sqlite3.Connection, eid: str, slug: str) -> "str | None":
+    if con.execute("SELECT 1 FROM entries WHERE id=?", (eid,)).fetchone():
+        return "id-collision"
+    if con.execute("SELECT 1 FROM entries WHERE slug=?", (slug,)).fetchone():
+        return "slug-collision"
+    return None
+
+
+def _aliases(meta: dict) -> list[str]:
+    v = meta.get("aliases", [])
+    if isinstance(v, list):
+        return [str(a) for a in v if str(a).strip()]
+    return [str(v)] if str(v).strip() else []
+
+
+def _map_put(m: dict, key: str, rowid: int) -> None:
+    if key in m and m[key] != rowid:
+        m[key] = _AMBIG
+    else:
+        m[key] = rowid
+
+
+def _link_targets(body: str) -> list[str]:
+    out = []
+    for m in _WIKILINK.finditer(body):
+        # sintaxe Obsidian: [[alvo|display]] e [[alvo#heading]]
+        t = m.group(1).split("|")[0].split("#")[0].strip()
+        if t:
+            out.append(t)
+    return out
+
+
+def _resolve(target: str, by_slug: dict, by_title: dict,
+             by_alias: dict) -> "int | None":
+    if target in by_slug:
+        return by_slug[target]
+    t = target.lower()
+    if t in by_title:
+        return by_title[t]
+    if t in by_alias:
+        return by_alias[t]
+    return None
+
+
 def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
-            location: str, slug: str) -> None:
+            location: str, slug: str) -> int:
     title = str(meta.get("title", slug))
     tags = meta.get("tags", [])
-    tags_text = " ".join(tags) if isinstance(tags, list) else str(tags)
+    tag_list = [str(t) for t in tags] if isinstance(tags, list) else [str(tags)]
+    tag_list = [t for t in tag_list if t.strip()]
+    tags_text = " ".join(tag_list)
+    aliases_text = " ".join(_aliases(meta))
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated)"
@@ -73,8 +157,14 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
          meta.get("project"), str(meta.get("content_hash", "")),
          str(meta.get("created", "")), str(meta.get("updated",
                                                     meta.get("created", "")))))
+    rowid = cur.lastrowid
     con.execute(
-        "INSERT INTO entries_fts(rowid, title, tags, body, title_norm,"
-        " tags_norm, body_norm) VALUES (?,?,?,?,?,?,?)",
-        (cur.lastrowid, title, tags_text, body,
-         normalize(title), normalize(tags_text), normalize(body)))
+        "INSERT INTO entries_fts(rowid, title, aliases, tags, body,"
+        " title_norm, aliases_norm, tags_norm, body_norm)"
+        " VALUES (?,?,?,?,?,?,?,?,?)",
+        (rowid, title, aliases_text, tags_text, body, normalize(title),
+         normalize(aliases_text), normalize(tags_text), normalize(body)))
+    for tag in {t.lower() for t in tag_list}:
+        con.execute("INSERT OR IGNORE INTO entry_tags VALUES (?,?)",
+                    (rowid, tag))
+    return rowid
