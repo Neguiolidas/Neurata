@@ -5,8 +5,9 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 
+from neurata import config as query_config
 from neurata.home import SCHEMA_VERSION, NeurataHome
-from neurata.indexdb import fts5_available
+from neurata.indexdb import INDEX_SCHEMA_VERSION, fts5_available
 
 
 @dataclass
@@ -22,8 +23,10 @@ def run_checks(home: NeurataHome) -> list[Check]:
     if checks[-1].status == "fail":
         return checks
     checks.append(_config(home))
+    checks.append(_query_config(home))
     checks.append(_fts5(home))
     checks.append(_index(home))
+    checks.append(_index_schema(home))
     checks.append(_freshness(home))
     checks.append(_skipped(home))
     checks.append(_lock(home))
@@ -67,6 +70,29 @@ def _config(home: NeurataHome) -> Check:
                      f"(esperado {SCHEMA_VERSION})",
                      "migração de schema — ver spec §16.5")
     return Check("config", "ok", f"schema_version={SCHEMA_VERSION}")
+
+
+def _query_config(home: NeurataHome) -> Check:
+    try:
+        query_config.load(home)
+    except query_config.ConfigError as exc:
+        return Check("query-config", "fail", str(exc),
+                     "corrija config.json (chaves/valores de query)")
+    return Check("query-config", "ok", "válida")
+
+
+def _index_schema(home: NeurataHome) -> Check:
+    if not home.index_path.exists():
+        return Check("index-schema", "ok", "index.db ausente (ver check "
+                     "index)")
+    v = _meta(home, "index_schema_version")
+    if v is None or str(v) != str(INDEX_SCHEMA_VERSION):
+        return Check("index-schema", "warn",
+                     f"index_schema_version={v} "
+                     f"(esperado {INDEX_SCHEMA_VERSION})",
+                     "rode `neurata reindex`")
+    return Check("index-schema", "ok",
+                 f"index_schema_version={INDEX_SCHEMA_VERSION}")
 
 
 def _fts5(home: NeurataHome) -> Check:

@@ -123,3 +123,33 @@ def test_unexpected_exception_never_leaks_traceback(
     assert out["error"]["code"] == "RuntimeError"
     assert out["error"]["message"] == "boom"
     assert "Traceback" not in captured.out + captured.err
+
+
+def test_query_json_roundtrip(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "conteúdo sobre vetores e RRF", "--title", "Vetores"])
+    main(["reindex"])
+    capsys.readouterr()
+    rc = main(["query", "vetores", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True and out["command"] == "query"
+    assert out["result"]["results"][0]["via"] == "lexical"
+
+
+def test_query_before_reindex_remediation(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    rc = main(["query", "x", "--json"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert "reindex" in out["error"]["message"]
+
+
+def test_bad_args_emit_json_envelope(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    rc = main(["query", "x", "--limit", "nan", "--json"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["error"]["code"] == "UsageError"

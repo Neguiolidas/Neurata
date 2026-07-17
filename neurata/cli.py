@@ -7,13 +7,30 @@ import sys
 from neurata.deposit import DepositError, deposit
 from neurata.doctor import exit_code, run_checks
 from neurata.home import CONTRACT_VERSION, NeurataHome
+from neurata.config import ConfigError
 from neurata.indexdb import FTS5MissingError, LockHeldError
+from neurata.query import QueryError, query
 from neurata.reindex import reindex
+
+
+class UsageError(Exception):
+    pass
+
+
+class _Parser(argparse.ArgumentParser):
+    """argparse sem sys.exit: bad args viram UsageError → envelope."""
+
+    def error(self, message: str) -> "None":  # type: ignore[override]
+        raise UsageError(message)
 
 
 def main(argv: "list[str] | None" = None) -> int:
     parser = _build_parser()
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except UsageError as exc:
+        _emit_usage_error(argv, exc)
+        return 2
     if not getattr(args, "command", None):
         parser.print_help()
         return 2
@@ -21,7 +38,8 @@ def main(argv: "list[str] | None" = None) -> int:
         home = NeurataHome()
         home.init()
         result, rc = _dispatch(args, home)
-    except (DepositError, FTS5MissingError, LockHeldError, OSError) as exc:
+    except (ConfigError, DepositError, FTS5MissingError, LockHeldError,
+            QueryError, OSError) as exc:
         _emit_error(args, exc)
         return 2
     except Exception as exc:  # nunca vaza traceback pela CLI
@@ -43,6 +61,8 @@ def _dispatch(args: argparse.Namespace, home: NeurataHome) -> tuple[dict, int]:
         return result, 0
     if args.command == "reindex":
         return reindex(home), 0
+    if args.command == "query":
+        return query(home, args.q, limit=args.limit), 0
     if args.command == "doctor":
         checks = run_checks(home)
         return ({"checks": [dataclasses.asdict(c) for c in checks]},
@@ -51,7 +71,7 @@ def _dispatch(args: argparse.Namespace, home: NeurataHome) -> tuple[dict, int]:
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = _Parser(
         prog="neurata",
         description="Neurata — the living knowledge layer for an agent's "
                     "environment.")
@@ -74,6 +94,12 @@ def _build_parser() -> argparse.ArgumentParser:
     dep.add_argument("--json", action="store_true",
                      default=argparse.SUPPRESS)
 
+    qry = sub.add_parser("query", help="busca lexical + grafo → cards")
+    qry.add_argument("q", help='texto e/ou facets (type:/tag:/env:/project:)')
+    qry.add_argument("--limit", type=int, default=10)
+    qry.add_argument("--json", action="store_true",
+                     default=argparse.SUPPRESS)
+
     for name, hlp in (("reindex", "rebuild total do índice"),
                       ("doctor", "self-check com remediação")):
         p = sub.add_parser(name, help=hlp)
@@ -91,6 +117,16 @@ def _emit(args: argparse.Namespace, result: dict, rc: int = 0) -> None:
         print(json.dumps({"contract_version": CONTRACT_VERSION, "ok": ok,
                           "command": args.command, "result": result},
                          ensure_ascii=False))
+        return
+    if args.command == "query":
+        for c in result["results"]:
+            score = "-" if c["score"] is None else f"{c['score']:.4f}"
+            line = f"{score} {c['slug']} — {c['title']}"
+            if c.get("snippet"):
+                line += f" ({c['snippet'][:100]})"
+            print(line)
+        if not result["results"]:
+            print("(sem resultados)")
         return
     if args.command == "doctor":
         for c in result["checks"]:
@@ -113,3 +149,15 @@ def _emit_error(args: argparse.Namespace, exc: Exception) -> None:
                          ensure_ascii=False))
     else:
         print(f"erro ({type(exc).__name__}): {exc}", file=sys.stderr)
+
+
+def _emit_usage_error(argv: "list[str] | None", exc: Exception) -> None:
+    args = argv if argv is not None else sys.argv[1:]
+    if "--json" in args:
+        print(json.dumps({"contract_version": CONTRACT_VERSION, "ok": False,
+                          "command": None,
+                          "error": {"code": "UsageError",
+                                    "message": str(exc)}},
+                         ensure_ascii=False))
+    else:
+        print(f"erro (UsageError): {exc}", file=sys.stderr)
