@@ -31,6 +31,7 @@ def query(home: NeurataHome, qstr: str, limit: int = 10) -> dict:
         _check_schema(con)
         pre_sql, pre_params = _prefilter(parsed)
         if not parsed.has_text:
+            assert pre_sql is not None  # has_facets garante clauses não-vazias
             results = _facet_listing(con, pre_sql, pre_params, limit)
         else:
             results = _search(con, cfg, parsed, pre_sql, pre_params,

@@ -4,6 +4,7 @@ import sqlite3
 import time
 from datetime import datetime
 
+from neurata import archive
 from neurata.doctor import exit_code, run_checks
 from neurata.home import NeurataHome
 from neurata.reindex import reindex
@@ -73,7 +74,7 @@ def test_corrupt_index_fails_cleanly(tmp_path):
     home = _home(tmp_path)
     home.index_path.write_bytes(b"\x00lixo que nao e sqlite\xff\xfe")
     checks = run_checks(home)  # nao pode explodir
-    assert len(checks) == 10  # todos os checks presentes
+    assert len(checks) == 12  # todos os checks presentes
     by = _by_name(checks)
     assert by["index"].status == "fail"
     assert by["index"].remedy
@@ -94,3 +95,49 @@ def test_freshness_same_second_not_stale(tmp_path):
     os.utime(path, (last_ts + 0.9, last_ts + 0.9))
     checks = _by_name(run_checks(home))
     assert checks["index-freshness"].status == "ok"
+
+
+def test_archive_ok_when_nothing_compacted(tmp_path):
+    home = _home(tmp_path)
+    (home.library / "n.md").write_text("---\nid: 01Z\ntitle: T\n---\ncorpo\n")
+    reindex(home)
+    checks = _by_name(run_checks(home))
+    assert checks["archive"].status == "ok"
+
+
+def test_archive_ok_when_blob_present(tmp_path):
+    home = _home(tmp_path)
+    sha = archive.put(home, b"full original")
+    (home.library / "c.md").write_text(
+        f"---\nid: 01A\ntitle: T\nderived_from: {sha}\n---\nsummary\n")
+    reindex(home)
+    checks = _by_name(run_checks(home))
+    assert checks["archive"].status == "ok"
+
+
+def test_archive_fails_when_blob_missing(tmp_path):
+    home = _home(tmp_path)
+    missing_sha = "a" * 64
+    (home.library / "c.md").write_text(
+        f"---\nid: 01B\ntitle: T\nderived_from: {missing_sha}\n---\nsum\n")
+    reindex(home)
+    checks = _by_name(run_checks(home))
+    assert checks["archive"].status == "fail"
+    assert missing_sha in checks["archive"].detail
+    assert checks["archive"].remedy
+
+
+def test_usage_ok_when_no_log(tmp_path):
+    home = _home(tmp_path)
+    reindex(home)
+    checks = _by_name(run_checks(home))
+    assert checks["usage"].status == "ok"
+
+
+def test_usage_warns_on_corrupt_lines(tmp_path):
+    home = _home(tmp_path)
+    reindex(home)
+    (home.logs / "usage.jsonl").write_text("{not json\n")
+    checks = _by_name(run_checks(home))
+    assert checks["usage"].status == "warn"
+    assert "1" in checks["usage"].detail

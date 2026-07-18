@@ -153,3 +153,209 @@ def test_bad_args_emit_json_envelope(tmp_path, monkeypatch, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is False
     assert out["error"]["code"] == "UsageError"
+
+
+_LONG_BODY = (
+    "## Seção 1\n\n"
+    "Primeiro parágrafo da seção um com bastante texto pra simular "
+    "conteúdo real que algum dia precisa ser compactado pelo sistema.\n\n"
+    "Segundo parágrafo da seção um — este some do summary, que só pega "
+    "o primeiro parágrafo de cada seção.\n\n"
+    "## Seção 2\n\n"
+    "Parágrafo único da seção dois."
+)
+
+
+def test_compact_json_produces_summary_and_archives_full(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", _LONG_BODY, "--title", "Compactável", "--json"])
+    eid = json.loads(capsys.readouterr().out)["result"]["id"]
+    main(["reindex"])
+    capsys.readouterr()
+
+    rc = main(["compact", eid, "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True and out["command"] == "compact"
+    result = out["result"]
+    assert result["action"] == "compacted"
+    assert result["id"] == eid
+    assert result["archived"]
+
+    path = tmp_path / result["path"]
+    from neurata.frontmatter import parse
+    meta, body = parse(path.read_text(encoding="utf-8"))
+    assert meta["derived_from"] == result["archived"]
+    # summary segundo parágrafo da Seção 1 some, mas o resto persiste.
+    assert "Segundo parágrafo" not in body
+    assert "Seção 2" in body
+
+
+def test_compact_noop_when_body_already_is_summary(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "corpo curtinho sem headings", "--json"])
+    eid = json.loads(capsys.readouterr().out)["result"]["id"]
+    main(["reindex"])
+    capsys.readouterr()
+
+    rc = main(["compact", eid, "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["result"]["action"] == "noop"
+    assert out["result"]["id"] == eid
+
+
+def test_compact_then_expand_restore_is_byte_identical(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", _LONG_BODY, "--title", "Roundtrip", "--json"])
+    eid = json.loads(capsys.readouterr().out)["result"]["id"]
+    main(["reindex"])
+    capsys.readouterr()
+
+    from neurata.frontmatter import parse
+    rc = main(["compact", eid, "--json"])
+    assert rc == 0
+    compacted = json.loads(capsys.readouterr().out)["result"]
+    real_path = tmp_path / compacted["path"]
+    _, summary_body = parse(real_path.read_text(encoding="utf-8"))
+    assert summary_body != _LONG_BODY
+
+    rc = main(["expand", eid, "--grain", "full", "--json"])
+    assert rc == 0
+    full_out = json.loads(capsys.readouterr().out)["result"]
+    assert full_out["text"] == _LONG_BODY
+
+    rc = main(["expand", eid, "--restore", "--json"])
+    assert rc == 0
+    restored = json.loads(capsys.readouterr().out)["result"]
+    assert restored["action"] == "restored"
+    _, restored_body = parse(real_path.read_text(encoding="utf-8"))
+    assert restored_body == _LONG_BODY
+
+
+def test_expand_grain_card_and_summary_via_cli(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", _LONG_BODY, "--title", "Grãos", "--json"])
+    eid = json.loads(capsys.readouterr().out)["result"]["id"]
+    main(["reindex"])
+    capsys.readouterr()
+
+    rc = main(["expand", eid, "--grain", "card", "--json"])
+    assert rc == 0
+    card = json.loads(capsys.readouterr().out)["result"]["text"]
+    assert card and "\n" not in card
+
+    rc = main(["expand", eid, "--grain", "summary", "--json"])
+    assert rc == 0
+    summary = json.loads(capsys.readouterr().out)["result"]["text"]
+    assert "Segundo parágrafo" not in summary
+    assert "Seção 2" in summary
+
+
+def test_expand_restore_noop_when_not_compacted(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "nunca foi compactado", "--json"])
+    eid = json.loads(capsys.readouterr().out)["result"]["id"]
+    main(["reindex"])
+    capsys.readouterr()
+
+    rc = main(["expand", eid, "--restore", "--json"])
+    assert rc == 0
+    result = json.loads(capsys.readouterr().out)["result"]
+    assert result["action"] == "noop"
+    assert result["id"] == eid
+
+
+def test_expand_human_output_prints_text(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "um corpo qualquer", "--json"])
+    eid = json.loads(capsys.readouterr().out)["result"]["id"]
+    main(["reindex"])
+    capsys.readouterr()
+
+    rc = main(["expand", eid])
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "um corpo qualquer"
+
+
+def test_expand_bad_grain_emits_usage_error(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "x", "--json"])
+    eid = json.loads(capsys.readouterr().out)["result"]["id"]
+    capsys.readouterr()
+
+    rc = main(["expand", eid, "--grain", "invalido", "--json"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["error"]["code"] == "UsageError"
+
+
+def test_shelf_inventory_json_marks_never_consulted(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "nunca foi consultado", "--title", "T", "--json"])
+    capsys.readouterr()
+    main(["reindex"])
+    capsys.readouterr()
+
+    rc = main(["shelf", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True and out["command"] == "shelf"
+    items = out["result"]["items"]
+    assert items
+    assert items[0]["candidato_arquivamento"] is True
+    assert items[0]["impressions"] == 0 and items[0]["expands"] == 0
+
+
+def test_shelf_insights_json_after_expand(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "conteúdo consultado depois", "--title", "T", "--json"])
+    eid = json.loads(capsys.readouterr().out)["result"]["id"]
+    main(["reindex"])
+    capsys.readouterr()
+    main(["expand", eid, "--json"])
+    capsys.readouterr()
+
+    rc = main(["shelf", "--insights", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    result = out["result"]
+    assert any(c["id"] == eid for c in result["top_expands"])
+    assert "total_conflitos" in result
+
+
+def test_shelf_conflicts_json_reports_manual_conflicts_with(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "a", "--title", "A", "--json"])
+    capsys.readouterr()
+    main(["reindex"])
+    capsys.readouterr()
+
+    lib = tmp_path / "library"
+    (lib / "conflitante.md").write_text(
+        "---\nid: 01CONFLICT\ntitle: Conflitante\n"
+        "conflicts_with: [\"a\"]\n---\ncorpo\n")
+
+    rc = main(["shelf", "--conflicts", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["result"]["conflicts_with"]
+    assert out["result"]["conflicts_with"][0]["conflicts_with"] == ["a"]
+
+
+def test_shelf_human_output(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "algo pro shelf", "--title", "T"])
+    main(["reindex"])
+    capsys.readouterr()
+
+    rc = main(["shelf"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "candidato-arquivamento" in out

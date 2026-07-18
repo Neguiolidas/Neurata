@@ -185,6 +185,7 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
                                                     meta.get("created", ""))),
          grain_quality))
     rowid = cur.lastrowid
+    assert rowid is not None  # INSERT sempre popula lastrowid
     con.execute(
         "INSERT INTO entries_fts(rowid, title, aliases, tags, body,"
         " title_norm, aliases_norm, tags_norm, body_norm)"

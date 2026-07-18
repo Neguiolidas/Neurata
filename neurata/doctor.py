@@ -5,9 +5,12 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from neurata import config as query_config
+from neurata import archive, config as query_config, usage
+from neurata.frontmatter import FrontmatterError, parse as parse_frontmatter
 from neurata.home import SCHEMA_VERSION, NeurataHome
 from neurata.indexdb import INDEX_SCHEMA_VERSION, fts5_available
+
+_ARCHIVE_SAMPLE = 20
 
 
 @dataclass
@@ -30,6 +33,8 @@ def run_checks(home: NeurataHome) -> list[Check]:
     checks.append(_freshness(home))
     checks.append(_skipped(home))
     checks.append(_lock(home))
+    checks.append(_archive(home))
+    checks.append(_usage(home))
     return checks
 
 
@@ -162,6 +167,53 @@ def _skipped(home: NeurataHome) -> Check:
         return Check("skipped-files", "warn", paths,
                      "corrija o frontmatter dos arquivos pulados")
     return Check("skipped-files", "ok", "nenhum")
+
+
+def _archive(home: NeurataHome) -> Check:
+    shas: list[str] = []
+    for base in (home.library, home.inbox):
+        for path in sorted(base.rglob("*.md")):
+            try:
+                meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, FrontmatterError):
+                continue
+            derived_from = meta.get("derived_from")
+            if derived_from:
+                shas.append(str(derived_from))
+    if not shas:
+        return Check("archive", "ok", "nenhuma entrada compactada")
+    sample = shas[:_ARCHIVE_SAMPLE]
+    bad = []
+    for sha in sample:
+        try:
+            archive.get(home, sha)
+        except (archive.BadShaError, archive.ArchiveMissingError,
+                archive.ArchiveCorruptError) as exc:
+            bad.append(f"{sha}: {exc}")
+    if bad:
+        return Check("archive", "fail",
+                     f"{len(bad)}/{len(sample)} blob(s) inválido(s): "
+                     + "; ".join(bad),
+                     "restaure archive/ de backup — o Neurata nunca "
+                     "reescreve blobs, então corrupção só vem de fora")
+    detail = f"{len(sample)}/{len(shas)} blob(s) verificado(s), ok"
+    return Check("archive", "ok", detail)
+
+
+def _usage(home: NeurataHome) -> Check:
+    path = home.logs / "usage.jsonl"
+    if not path.exists():
+        return Check("usage", "ok", "usage.jsonl ausente (nenhum uso "
+                     "registrado ainda)")
+    data = usage.read_usage(home)
+    corrupt = data["corrupt_lines"]
+    if corrupt:
+        return Check("usage", "warn",
+                     f"{corrupt} linha(s) corrompida(s) em usage.jsonl",
+                     "linhas corrompidas são só puladas — sem ação "
+                     "obrigatória, mas investigue se o volume crescer")
+    return Check("usage", "ok", f"{len(data['entries'])} entrada(s) "
+                 "com uso registrado")
 
 
 def _lock(home: NeurataHome) -> Check:

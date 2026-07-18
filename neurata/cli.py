@@ -4,13 +4,19 @@ import dataclasses
 import json
 import sys
 
+from neurata.compact import compact
 from neurata.deposit import DepositError, deposit
 from neurata.doctor import exit_code, run_checks
+from neurata.entryref import EntryAmbiguousError, EntryNotFoundError
+from neurata.expand import ExpandError, expand
 from neurata.home import CONTRACT_VERSION, NeurataHome
 from neurata.config import ConfigError
 from neurata.indexdb import FTS5MissingError, LockHeldError
 from neurata.query import QueryError, query
 from neurata.reindex import reindex
+from neurata.shelf import conflicts as shelf_conflicts
+from neurata.shelf import insights as shelf_insights
+from neurata.shelf import inventory as shelf_inventory
 
 
 class UsageError(Exception):
@@ -38,8 +44,9 @@ def main(argv: "list[str] | None" = None) -> int:
         home = NeurataHome()
         home.init()
         result, rc = _dispatch(args, home)
-    except (ConfigError, DepositError, FTS5MissingError, LockHeldError,
-            QueryError, OSError) as exc:
+    except (ConfigError, DepositError, EntryAmbiguousError,
+            EntryNotFoundError, ExpandError, FTS5MissingError,
+            LockHeldError, QueryError, OSError) as exc:
         _emit_error(args, exc)
         return 2
     except Exception as exc:  # nunca vaza traceback pela CLI
@@ -67,6 +74,17 @@ def _dispatch(args: argparse.Namespace, home: NeurataHome) -> tuple[dict, int]:
         checks = run_checks(home)
         return ({"checks": [dataclasses.asdict(c) for c in checks]},
                 exit_code(checks))
+    if args.command == "compact":
+        return compact(home, args.ref), 0
+    if args.command == "expand":
+        return expand(home, args.ref, grain=args.grain,
+                      restore=args.restore), 0
+    if args.command == "shelf":
+        if args.conflicts:
+            return shelf_conflicts(home), 0
+        if args.insights:
+            return shelf_insights(home), 0
+        return shelf_inventory(home), 0
     raise AssertionError(f"comando desconhecido: {args.command}")
 
 
@@ -105,6 +123,29 @@ def _build_parser() -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=hlp)
         p.add_argument("--json", action="store_true",
                        default=argparse.SUPPRESS)
+
+    cpt = sub.add_parser("compact",
+                         help="corpo->summary, full pro archive (utilitário)")
+    cpt.add_argument("ref", help="id ou slug")
+    cpt.add_argument("--json", action="store_true",
+                     default=argparse.SUPPRESS)
+
+    exp = sub.add_parser("expand", help="grão maior sob demanda")
+    exp.add_argument("ref", help="id ou slug")
+    exp.add_argument("--grain", choices=("card", "summary", "full"),
+                     default="full")
+    exp.add_argument("--restore", action="store_true",
+                     help="restaura o full do archive, remove derived_from")
+    exp.add_argument("--json", action="store_true",
+                     default=argparse.SUPPRESS)
+
+    shf = sub.add_parser("shelf", help="inventário ordenado por score desc")
+    shf.add_argument("--insights", action="store_true",
+                     help="top consultados/expands, nunca-consultados")
+    shf.add_argument("--conflicts", action="store_true",
+                     help="conflicts_with + colisões id/slug")
+    shf.add_argument("--json", action="store_true",
+                     default=argparse.SUPPRESS)
     return parser
 
 
@@ -135,6 +176,32 @@ def _emit(args: argparse.Namespace, result: dict, rc: int = 0) -> None:
             if c["remedy"]:
                 line += f" — {c['remedy']}"
             print(line)
+        return
+    if args.command == "expand" and "text" in result:
+        print(result["text"])
+        return
+    if args.command == "shelf":
+        if args.conflicts:
+            for c in result["conflicts_with"]:
+                print(f"conflicts_with {c['id']} {c['path']}: "
+                     f"{', '.join(c['conflicts_with'])}")
+            for c in result["collisions"]:
+                print(f"colisão {c.get('reason')}: {c}")
+            if not result["conflicts_with"] and not result["collisions"]:
+                print("(sem conflitos)")
+            return
+        if args.insights:
+            print(f"total_conflitos={result['total_conflitos']}")
+            for label in ("top_consultados", "top_expands",
+                         "nunca_consultados"):
+                print(f"-- {label} --")
+                for c in result[label]:
+                    print(f"{c['slug']} — {c['title']}")
+            return
+        for c in result["items"]:
+            flag = " [candidato-arquivamento]" if c[
+                "candidato_arquivamento"] else ""
+            print(f"{c['score']:.4f} {c['slug']} — {c['title']}{flag}")
         return
     print(" ".join(f"{k}={v}" for k, v in result.items()
                    if not isinstance(v, (list, dict))))
