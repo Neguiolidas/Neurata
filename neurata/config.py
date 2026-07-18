@@ -16,6 +16,8 @@ DEFAULTS: dict = {
     "rrf_k": 60,
     "w_ppr": 0.3,
     "skill_boost": 1.5,
+    "shelf": {"w_u": 1.0, "w_r": 1.0, "w_c": 0.5, "tau_dias": 30.0,
+              "beta": 0.15},
 }
 # schema_version pertence ao config desde a fase 1 (home.init escreve).
 _TOP_KEYS = set(DEFAULTS) | {"schema_version"}

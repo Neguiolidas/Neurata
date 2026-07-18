@@ -171,16 +171,19 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
     tag_list = [t for t in tag_list if t.strip()]
     tags_text = " ".join(tag_list)
     aliases_text = " ".join(_aliases(meta))
+    grain_quality = str(meta.get("grain_quality", "mechanical")) or "mechanical"
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
-        " description, project, content_hash, created, updated)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        " description, project, content_hash, created, updated,"
+        " grain_quality)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
          title, str(meta.get("description", "")),
          meta.get("project"), str(meta.get("content_hash", "")),
          str(meta.get("created", "")), str(meta.get("updated",
-                                                    meta.get("created", "")))))
+                                                    meta.get("created", ""))),
+         grain_quality))
     rowid = cur.lastrowid
     con.execute(
         "INSERT INTO entries_fts(rowid, title, aliases, tags, body,"

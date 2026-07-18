@@ -14,7 +14,7 @@ _REMEDY = (
 
 # Versão do schema do ÍNDICE (meta 'index_schema_version'); distinta do
 # SCHEMA_VERSION do config em home.py. Só o reindex grava; query checa.
-INDEX_SCHEMA_VERSION = 3
+INDEX_SCHEMA_VERSION = 4
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS entries(
   project TEXT,
   content_hash TEXT NOT NULL,
   created TEXT NOT NULL,
-  updated TEXT NOT NULL
+  updated TEXT NOT NULL,
+  grain_quality TEXT NOT NULL DEFAULT 'mechanical'
 );
 """
 

@@ -5,7 +5,7 @@ parse facets → prefiltro (subquery rowid) → fan-out ≤6 MATCH → RRF
 """
 import sqlite3
 
-from neurata import config, linkgraph, router, rrf
+from neurata import config, linkgraph, router, rrf, shelf, usage
 from neurata.home import NeurataHome
 from neurata.indexdb import INDEX_SCHEMA_VERSION, connect
 
@@ -31,12 +31,15 @@ def query(home: NeurataHome, qstr: str, limit: int = 10) -> dict:
         _check_schema(con)
         pre_sql, pre_params = _prefilter(parsed)
         if not parsed.has_text:
-            return {"results": _facet_listing(con, pre_sql, pre_params,
-                                              limit)}
-        return {"results": _search(con, cfg, parsed, pre_sql, pre_params,
-                                   limit)}
+            results = _facet_listing(con, pre_sql, pre_params, limit)
+        else:
+            results = _search(con, cfg, parsed, pre_sql, pre_params,
+                              limit, home)
     finally:
         con.close()
+    for rank, card in enumerate(results, start=1):
+        usage.log_event(home, "query", card["id"], query=qstr, rank=rank)
+    return {"results": results}
 
 
 def _check_schema(con: sqlite3.Connection) -> None:
@@ -76,7 +79,7 @@ def _facet_listing(con: sqlite3.Connection, pre_sql: str, pre_params: list,
 
 def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
             pre_sql: "str | None", pre_params: list,
-            limit: int) -> list[dict]:
+            limit: int, home: NeurataHome) -> list[dict]:
     w = cfg["bm25_weights"]
     bm25_args = [w["title"], w["aliases"], w["tags"], w["body"]] * 2
     ranked: list[tuple[float, list[int]]] = []
@@ -116,15 +119,46 @@ def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
                     via.setdefault(r, "graph")
     boost = cfg["skill_boost"] if parsed.skill_hint else None
     cards = []
+    rowid_of: dict[str, int] = {}
     for row in _fetch_entries(con, list(final)):
         rowid = row[0]
         score = final[rowid]
         if boost and row[5] == "skill":
             score *= boost
-        cards.append(_card(row, score=round(score, 6),
-                           snippet=snippets.get(rowid), via=via[rowid]))
+        card = _card(row, score=round(score, 6),
+                    snippet=snippets.get(rowid), via=via[rowid])
+        rowid_of[card["id"]] = rowid
+        cards.append(card)
     cards.sort(key=lambda c: (-c["score"], c["slug"]))
-    return cards[:limit]
+    top = cards[:limit]
+    _apply_shelf(con, home, cfg["shelf"], top, rowid_of)
+    top.sort(key=lambda c: (-c["score"], c["slug"]))
+    return top
+
+
+def _apply_shelf(con: sqlite3.Connection, home: NeurataHome,
+                 cfg_shelf: dict, cards: list[dict],
+                 rowid_of: dict[str, int]) -> None:
+    if not cards:
+        return
+    rowids = [rowid_of[c["id"]] for c in cards]
+    marks = ",".join("?" * len(rowids))
+    rows = con.execute(
+        f"SELECT rowid, updated, grain_quality FROM entries"
+        f" WHERE rowid IN ({marks})", rowids).fetchall()
+    meta = {r[0]: (r[1], r[2]) for r in rows}
+    agg = usage.read_usage(home)["entries"]
+    for card in cards:
+        rowid = rowid_of[card["id"]]
+        updated, grain_quality = meta.get(rowid, ("", "mechanical"))
+        u = agg.get(card["id"], {"impressions": 0, "expands": 0})
+        card["shelf_score"] = shelf.compute_score(
+            cfg_shelf, u["impressions"], u["expands"], updated,
+            grain_quality)
+    shelf.apply_boost(cards, cfg_shelf["beta"])
+    for card in cards:
+        card["score"] = round(card["score"], 6)
+        del card["shelf_score"]
 
 
 def _filter_rowids(con: sqlite3.Connection, rowids: set[int],
