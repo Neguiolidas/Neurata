@@ -1,4 +1,5 @@
 """neurata/indexdb.py — índice sqlite descartável. FTS5 = requisito duro."""
+import json
 import os
 import sqlite3
 
@@ -13,8 +14,9 @@ _REMEDY = (
 )
 
 # Versão do schema do ÍNDICE (meta 'index_schema_version'); distinta do
-# SCHEMA_VERSION do config em home.py. Só o reindex grava; query checa.
-INDEX_SCHEMA_VERSION = 4
+# SCHEMA_VERSION do config em home.py. Só o reindex grava; check_schema
+# (público) checa — v5: coluna `shingles` (near-dup, Task 1/neurata.dedup).
+INDEX_SCHEMA_VERSION = 5
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -50,7 +52,8 @@ CREATE TABLE IF NOT EXISTS entries(
   content_hash TEXT NOT NULL,
   created TEXT NOT NULL,
   updated TEXT NOT NULL,
-  grain_quality TEXT NOT NULL DEFAULT 'mechanical'
+  grain_quality TEXT NOT NULL DEFAULT 'mechanical',
+  shingles TEXT NOT NULL
 );
 """
 
@@ -66,6 +69,10 @@ class FTS5MissingError(RuntimeError):
 
 
 class LockHeldError(RuntimeError):
+    pass
+
+
+class IndexSchemaError(RuntimeError):
     pass
 
 
@@ -95,6 +102,27 @@ def create_schema(con: sqlite3.Connection) -> None:
     con.executescript(_SCHEMA)
     con.execute(_FTS)
     con.commit()
+
+
+def check_schema(con: sqlite3.Connection) -> None:
+    """Levanta se o índice não existe ou está em versão != atual.
+
+    SELECT puro no meta — zero efeito colateral. Público (promovido de
+    `query._check_schema`) pra `tick` também poder validar na entrada
+    do run, antes de rodar near-dup contra um índice sem coluna
+    `shingles` (v4).
+    """
+    row = con.execute(
+        "SELECT value FROM meta WHERE key='index_schema_version'").fetchone()
+    if row is None or str(row[0]) != str(INDEX_SCHEMA_VERSION):
+        raise IndexSchemaError(
+            "índice ausente ou em schema antigo — rode `neurata reindex`")
+
+
+def load_shingle_sets(con: sqlite3.Connection) -> "dict[str, frozenset]":
+    """{entry.id: frozenset(shingle-hashes)} pra near-dup em Task 4."""
+    rows = con.execute("SELECT id, shingles FROM entries").fetchall()
+    return {eid: frozenset(json.loads(shingles)) for eid, shingles in rows}
 
 
 def drop_schema(con: sqlite3.Connection) -> None:

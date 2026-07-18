@@ -7,7 +7,8 @@ import sqlite3
 
 from neurata import config, linkgraph, router, rrf, shelf, usage
 from neurata.home import NeurataHome
-from neurata.indexdb import INDEX_SCHEMA_VERSION, connect
+from neurata import indexdb
+from neurata.indexdb import connect
 
 _TOPN = 50    # candidatos por variante
 _SEEDS = 10   # seeds do PPR (top do RRF)
@@ -44,11 +45,12 @@ def query(home: NeurataHome, qstr: str, limit: int = 10) -> dict:
 
 
 def _check_schema(con: sqlite3.Connection) -> None:
-    row = con.execute(
-        "SELECT value FROM meta WHERE key='index_schema_version'").fetchone()
-    if row is None or str(row[0]) != str(INDEX_SCHEMA_VERSION):
-        raise QueryError(
-            "índice ausente ou em schema antigo — rode `neurata reindex`")
+    """Delegação pro `indexdb.check_schema` público (Task 2) — mesma
+    checagem, API do query intacta (QueryError, não IndexSchemaError)."""
+    try:
+        indexdb.check_schema(con)
+    except indexdb.IndexSchemaError as exc:
+        raise QueryError(str(exc)) from exc
 
 
 def _prefilter(parsed: router.ParsedQuery) -> "tuple[str | None, list]":

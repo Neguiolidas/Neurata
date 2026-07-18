@@ -18,6 +18,7 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 
+from neurata.dedup import shingle_hashes
 from neurata.frontmatter import FrontmatterError, parse
 from neurata.grains import make_card, make_summary
 from neurata.home import NeurataHome
@@ -172,18 +173,19 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
     tags_text = " ".join(tag_list)
     aliases_text = " ".join(_aliases(meta))
     grain_quality = str(meta.get("grain_quality", "mechanical")) or "mechanical"
+    shingles_json = json.dumps(shingle_hashes(body))
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
-        " grain_quality)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " grain_quality, shingles)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
          title, str(meta.get("description", "")),
          meta.get("project"), str(meta.get("content_hash", "")),
          str(meta.get("created", "")), str(meta.get("updated",
                                                     meta.get("created", ""))),
-         grain_quality))
+         grain_quality, shingles_json))
     rowid = cur.lastrowid
     assert rowid is not None  # INSERT sempre popula lastrowid
     con.execute(
