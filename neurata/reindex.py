@@ -1,9 +1,17 @@
 """neurata/reindex.py — rebuild total do índice a partir dos arquivos.
 
-2 passes: (1) entries + FTS + tags, guardando mapas slug/title/alias em
-memória; (2) resolução de [[wikilinks]] → edges. Link não-resolvido ou
-ambíguo é descartado e contado — determinístico, sem escolha arbitrária.
+2 passes: (1) entries + FTS + tags + grains, guardando mapas
+slug/title/alias em memória; (2) resolução de [[wikilinks]] → edges. Link
+não-resolvido ou ambíguo é descartado e contado — determinístico, sem
+escolha arbitrária.
+
+Grãos são regenerados incrementalmente: snapshot da tabela `grains` antes
+do drop, comparado por src_hash contra o corpo atual. Hash bate → reusa
+texto (evita custo de re-derivar toda entrada intocada). Regra anti
+summary-de-summary: `derived_from` no frontmatter (corpo já compactado)
+→ summary = corpo verbatim, sem re-derivar.
 """
+import hashlib
 import json
 import re
 import sqlite3
@@ -11,6 +19,7 @@ import time
 from datetime import datetime, timezone
 
 from neurata.frontmatter import FrontmatterError, parse
+from neurata.grains import make_card, make_summary
 from neurata.home import NeurataHome
 from neurata.indexdb import (INDEX_SCHEMA_VERSION, IndexLock, connect,
                              create_schema, drop_schema)
@@ -31,6 +40,7 @@ def reindex(home: NeurataHome) -> dict:
     with IndexLock(home):
         con = connect(home)
         try:
+            old_grains = _grains_snapshot(con)
             drop_schema(con)
             create_schema(con)
             for location, base in (("library", home.library),
@@ -58,7 +68,8 @@ def reindex(home: NeurataHome) -> dict:
                     if reason:
                         skipped.append({"path": rel, "reason": reason})
                         continue
-                    rowid = _insert(con, meta, body, rel, location, slug)
+                    rowid = _insert(con, meta, body, rel, location, slug,
+                                     old_grains)
                     indexed += 1
                     by_slug[slug] = rowid
                     _map_put(by_title, str(meta.get("title", slug)).lower(),
@@ -139,8 +150,21 @@ def _resolve(target: str, by_slug: dict, by_title: dict,
     return None
 
 
+def _grains_snapshot(con: sqlite3.Connection) -> dict:
+    """{entry_id: {kind: (text, src_hash)}} da tabela grains atual."""
+    snap: dict = {}
+    try:
+        rows = con.execute(
+            "SELECT entry_id, kind, text, src_hash FROM grains").fetchall()
+    except sqlite3.OperationalError:
+        return snap  # tabela ainda não existe (schema pré-v0.3)
+    for eid, kind, text, src_hash in rows:
+        snap.setdefault(eid, {})[kind] = (text, src_hash)
+    return snap
+
+
 def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
-            location: str, slug: str) -> int:
+            location: str, slug: str, old_grains: dict) -> int:
     title = str(meta.get("title", slug))
     tags = meta.get("tags", [])
     tag_list = [str(t) for t in tags] if isinstance(tags, list) else [str(tags)]
@@ -167,4 +191,34 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
     for tag in {t.lower() for t in tag_list}:
         con.execute("INSERT OR IGNORE INTO entry_tags VALUES (?,?)",
                     (rowid, tag))
+    _write_grains(con, str(meta["id"]), meta, body, old_grains)
     return rowid
+
+
+def _write_grains(con: sqlite3.Connection, entry_id: str, meta: dict,
+                   body: str, old_grains: dict) -> None:
+    body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    prior = old_grains.get(entry_id, {})
+
+    card_prev = prior.get("card")
+    if card_prev and card_prev[1] == body_hash:
+        card_text = card_prev[0]
+    else:
+        card_text = make_card(meta, body)
+
+    if meta.get("derived_from"):
+        # Regra anti summary-de-summary: corpo já compactado é o summary.
+        summary_text = body
+    else:
+        summary_prev = prior.get("summary")
+        if summary_prev and summary_prev[1] == body_hash:
+            summary_text = summary_prev[0]
+        else:
+            summary_text = make_summary(body)
+
+    con.execute(
+        "INSERT INTO grains VALUES (?,?,?,?)",
+        (entry_id, "card", card_text, body_hash))
+    con.execute(
+        "INSERT INTO grains VALUES (?,?,?,?)",
+        (entry_id, "summary", summary_text, body_hash))

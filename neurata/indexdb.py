@@ -14,7 +14,7 @@ _REMEDY = (
 
 # Versão do schema do ÍNDICE (meta 'index_schema_version'); distinta do
 # SCHEMA_VERSION do config em home.py. Só o reindex grava; query checa.
-INDEX_SCHEMA_VERSION = 2
+INDEX_SCHEMA_VERSION = 3
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -28,6 +28,13 @@ CREATE TABLE IF NOT EXISTS edges(
   src_rowid INTEGER NOT NULL,
   dst_rowid INTEGER NOT NULL,
   PRIMARY KEY(src_rowid, dst_rowid)
+);
+CREATE TABLE IF NOT EXISTS grains(
+  entry_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('card','summary')),
+  text TEXT NOT NULL,
+  src_hash TEXT NOT NULL,
+  PRIMARY KEY(entry_id, kind)
 );
 CREATE TABLE IF NOT EXISTS entries(
   rowid INTEGER PRIMARY KEY,
@@ -91,6 +98,7 @@ def create_schema(con: sqlite3.Connection) -> None:
 
 def drop_schema(con: sqlite3.Connection) -> None:
     con.execute("DROP TABLE IF EXISTS entries_fts")
+    con.execute("DROP TABLE IF EXISTS grains")
     con.execute("DROP TABLE IF EXISTS edges")
     con.execute("DROP TABLE IF EXISTS entry_tags")
     con.execute("DROP TABLE IF EXISTS entries")
