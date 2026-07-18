@@ -13,7 +13,7 @@ dynamic = ["version"]
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "mypy"]
+dev = ["pytest", "ruff", "pyright", "bandit", "vulture"]
 
 [project.scripts]
 neurata = "neurata.cli:main"
@@ -24,3 +24,31 @@ packages = ["neurata"]
 
 [tool.setuptools.dynamic]
 version = { attr = "neurata.__version__" }
+
+# ── pyright (type checker — substitui mypy) ─────────────────────────
+[tool.pyright]
+include = ["neurata"]
+pythonVersion = "3.10"
+typeCheckingMode = "standard"
+reportPossiblyUnboundVariable = "error"
+reportOptionalMemberAccess = "error"
+reportIncompatibleMethodOverride = "warning"
+reportMissingImports = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownVariableType = "none"
+reportMissingTypeStubs = "none"
+
+# ── bandit (security linter) ────────────────────────────────────────
+[tool.bandit]
+targets = ["neurata"]
+severity = "medium"
+confidence = "medium"
+skips = [
+  "B101",  # assert_used — pytest usa assert natural
+]
+
+# ── vulture (dead code finder) ──────────────────────────────────────
+[tool.vulture]
+paths = ["neurata"]
+min_confidence = 60
