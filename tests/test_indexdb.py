@@ -166,3 +166,45 @@ def test_check_schema_requiring_reindexed_with_never_reindexed(tmp_path):
     # Não gravar versão na meta — simula índice nunca reindexado
     with pytest.raises(IndexSchemaError):
         check_schema(con, require_reindexed=True)
+
+
+def test_check_schema_raises_on_v5_index_even_when_not_requiring_reindexed(tmp_path):
+    """Mismatch de versão (índice v5, schema atual v6) deve levantar
+    IndexSchemaError independente de require_reindexed=False — a checagem
+    de versão é anterior/independente do parâmetro `require_reindexed`,
+    que só afeta o caso de índice nunca-reindexado (sem linha em meta)."""
+    con = connect(_home(tmp_path))
+    con.execute("INSERT OR REPLACE INTO meta VALUES ('index_schema_version',"
+                " ?)", (str(5),))
+    con.commit()
+    with pytest.raises(IndexSchemaError):
+        check_schema(con, require_reindexed=False)
+
+
+def test_source_key_accepts_null(tmp_path):
+    con = connect(_home(tmp_path))
+    con.execute(
+        "INSERT INTO entries(id, slug, path, location, type, env, title,"
+        " description, content_hash, created, updated, shingles,"
+        " source_key)"
+        " VALUES ('u1','s1','library/s1.md','library','note','generic',"
+        " 't','', 'h1','2026-01-01','2026-01-01','[]', NULL)")
+    con.commit()
+    row = con.execute(
+        "SELECT source_key FROM entries WHERE id='u1'").fetchone()
+    assert row[0] is None
+
+
+def test_source_key_accepts_value(tmp_path):
+    con = connect(_home(tmp_path))
+    con.execute(
+        "INSERT INTO entries(id, slug, path, location, type, env, title,"
+        " description, content_hash, created, updated, shingles,"
+        " source_key)"
+        " VALUES ('u1','s1','library/s1.md','library','note','generic',"
+        " 't','', 'h1','2026-01-01','2026-01-01','[]', ?)",
+        ("some-source-key",))
+    con.commit()
+    row = con.execute(
+        "SELECT source_key FROM entries WHERE id='u1'").fetchone()
+    assert row[0] == "some-source-key"
