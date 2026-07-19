@@ -45,6 +45,8 @@ class TickReport:
     quarantined: int = 0
     conflicts: int = 0   # catalogados com marca near-dup (subconjunto)
     renamed: int = 0     # reparos do §3
+    updated: int = 0     # skill-item source-keyed: update in-place (§5)
+    stale: int = 0       # tombstone marcou entry como stale (§5)
     errors: "list[ItemError]" = field(default_factory=list)
     duration_ms: int = 0
 
@@ -114,6 +116,15 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
     else:
         meta = dict(meta)
         meta.setdefault("id", new_ulid())
+
+    if not literate:
+        if meta.get("type") == "skill-tombstone":
+            _process_tombstone(home, con, tick_id, path, meta, report)
+            return
+        if meta.get("source_key"):
+            _process_skill_item(home, con, tick_id, path, meta, body,
+                                report, shingle_sets)
+            return
 
     content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
 
@@ -191,6 +202,171 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
         report.literate += 1
     if conflict_new:
         report.conflicts += 1
+
+
+# ── §5 source-keyed: skill-item / tombstone ─────────────────────────
+
+def _process_skill_item(home: NeurataHome, con, tick_id: str, path: Path,
+                        meta: dict, body: str, report: TickReport,
+                        shingle_sets: dict) -> None:
+    rel_src = _relpath(home, path)
+    source_key = str(meta.get("source_key"))
+    row = con.execute(
+        "SELECT id, slug, path, content_hash FROM entries"
+        " WHERE source_key=? AND location='library'", (source_key,)
+    ).fetchone()
+
+    if row is None:
+        _catalog_skill_item(home, con, tick_id, path, meta, body, report,
+                            shingle_sets, rel_src)
+        return
+
+    entry_id, slug, lib_rel, lib_hash = row
+    content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    if content_hash == lib_hash:
+        # no-op: já refletido na library — só consome o item pendente.
+        try:
+            path.unlink()
+        except OSError as exc:
+            report.errors.append(ItemError(rel_src, f"transiente (I/O): {exc}"))
+        return
+
+    _sync_update_in_place(
+        home, con, tick_id, entry_id=entry_id, slug=slug,
+        lib_rel_path=lib_rel, source_key=source_key, new_meta=meta,
+        new_body=body, inbox_path=path, rel_src=rel_src, report=report,
+        shingle_sets=shingle_sets)
+
+
+def _catalog_skill_item(home: NeurataHome, con, tick_id: str, path: Path,
+                        meta: dict, body: str, report: TickReport,
+                        shingle_sets: dict, rel_src: str) -> None:
+    content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    title = str(meta.get("title") or path.stem)
+    slug = _unique_slug(con, slugify(title))
+    dest = home.library / f"{slug}.md"
+    meta.setdefault("content_hash", content_hash)
+
+    new_text = serialize(meta, body)
+    try:
+        path.write_text(new_text, encoding="utf-8")
+        path.rename(dest)
+    except OSError as exc:
+        report.errors.append(ItemError(rel_src, f"transiente (I/O): {exc}"))
+        return
+
+    rel_dst = _relpath(home, dest)
+    _index_insert(con, meta, body, rel_dst, "library", slug)
+    con.commit()
+    shingle_sets[str(meta["id"])] = frozenset(shingle_hashes(body))
+
+    ok = _journal(home, tick_id, "catalog", str(meta["id"]), rel_src,
+                 rel_dst, report, content_hash=content_hash)
+    if not ok:
+        return
+    report.processed += 1
+
+
+def _sync_update_in_place(home: NeurataHome, con, tick_id: str, *,
+                          entry_id: str, slug: str, lib_rel_path: str,
+                          source_key: "str | None", new_meta: dict,
+                          new_body: str, inbox_path: Path, rel_src: str,
+                          report: TickReport, shingle_sets: dict) -> None:
+    """Update-in-place de entry source-keyed. Nunca reconstrói o meta do
+    zero: parte do meta antigo (lido da library) e sobrescreve só o
+    subconjunto §4 + content_hash/updated, limpando stale/stale_since se
+    presentes. Preserva id/slug/path/created e toda chave extra."""
+    assert source_key is not None
+
+    lib_path = home.root / lib_rel_path
+    old_meta, _old_body = parse(lib_path.read_text(encoding="utf-8"))
+    merged = dict(old_meta)
+    for key in ("title", "description", "env", "source_key", "source_path"):
+        if key in new_meta:
+            merged[key] = new_meta[key]
+    merged.pop("stale", None)
+    merged.pop("stale_since", None)
+    content_hash = hashlib.sha256(new_body.encode("utf-8")).hexdigest()
+    merged["content_hash"] = content_hash
+    merged["updated"] = _now()
+
+    new_text = serialize(merged, new_body)
+    try:
+        lib_path.write_text(new_text, encoding="utf-8")
+    except OSError as exc:
+        report.errors.append(ItemError(rel_src, f"transiente (I/O): {exc}"))
+        return
+
+    _index_delete(con, entry_id)
+    _index_insert(con, merged, new_body, lib_rel_path, "library", slug)
+    con.commit()
+    item_id = str(merged.get("id", entry_id))
+    shingle_sets[item_id] = frozenset(shingle_hashes(new_body))
+
+    try:
+        inbox_path.unlink()
+    except OSError as exc:
+        report.errors.append(ItemError(rel_src, f"transiente (I/O): {exc}"))
+        return
+
+    _journal(home, tick_id, "update", item_id, rel_src, lib_rel_path,
+             report, content_hash=content_hash)
+    report.updated += 1
+
+
+def _index_delete(con, entry_id: str) -> None:
+    row = con.execute(
+        "SELECT rowid FROM entries WHERE id=?", (entry_id,)).fetchone()
+    if row is None:
+        return
+    rowid = row[0]
+    con.execute("DELETE FROM entries_fts WHERE rowid=?", (rowid,))
+    con.execute("DELETE FROM entry_tags WHERE entry_rowid=?", (rowid,))
+    con.execute("DELETE FROM entries WHERE id=?", (entry_id,))
+
+
+def _process_tombstone(home: NeurataHome, con, tick_id: str, path: Path,
+                       meta: dict, report: TickReport) -> None:
+    rel_src = _relpath(home, path)
+    source_key = meta.get("source_key")
+    row = None
+    if source_key:
+        row = con.execute(
+            "SELECT path FROM entries WHERE source_key=? AND"
+            " location='library'", (str(source_key),)).fetchone()
+
+    if row is None:
+        try:
+            path.unlink()
+        except OSError as exc:
+            report.errors.append(ItemError(rel_src, f"transiente (I/O): {exc}"))
+            return
+        _journal(home, tick_id, "noop", None, rel_src, None, report,
+                reason="tombstone: source_key nao encontrado na library")
+        return
+
+    lib_rel = row[0]
+    lib_path = home.root / lib_rel
+    try:
+        old_meta, body = parse(lib_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+        report.errors.append(ItemError(rel_src, f"transiente (I/O): {exc}"))
+        return
+
+    new_meta = dict(old_meta)
+    new_meta["stale"] = "true"
+    new_meta["stale_since"] = _now()
+    new_text = serialize(new_meta, body)
+    try:
+        lib_path.write_text(new_text, encoding="utf-8")
+        path.unlink()
+    except OSError as exc:
+        report.errors.append(ItemError(rel_src, f"transiente (I/O): {exc}"))
+        return
+
+    _journal(home, tick_id, "stale", str(new_meta.get("id")), rel_src,
+            lib_rel, report)
+    report.stale += 1
 
 
 def _guard_ok(home: NeurataHome, path: Path) -> bool:
@@ -372,26 +548,30 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
     aliases_text = " ".join(_aliases(meta))
     grain_quality = str(meta.get("grain_quality", "mechanical")) or "mechanical"
     shingles_json = _dumps(shingle_hashes(body))
+    source_key = meta.get("source_key")
+    description = str(meta.get("description", ""))
+    fts_body = f"{description}\n\n{body}" if description else body
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
-        " grain_quality, shingles)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " grain_quality, shingles, source_key)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
-         title, str(meta.get("description", "")),
+         title, description,
          meta.get("project"), str(meta.get("content_hash", "")),
          str(meta.get("created", "")),
          str(meta.get("updated", meta.get("created", ""))),
-         grain_quality, shingles_json))
+         grain_quality, shingles_json,
+         str(source_key) if source_key else None))
     rowid = cur.lastrowid
     assert rowid is not None
     con.execute(
         "INSERT INTO entries_fts(rowid, title, aliases, tags, body,"
         " title_norm, aliases_norm, tags_norm, body_norm)"
         " VALUES (?,?,?,?,?,?,?,?,?)",
-        (rowid, title, aliases_text, tags_text, body, normalize(title),
-         normalize(aliases_text), normalize(tags_text), normalize(body)))
+        (rowid, title, aliases_text, tags_text, fts_body, normalize(title),
+         normalize(aliases_text), normalize(tags_text), normalize(fts_body)))
     for tag in {t.lower() for t in tag_list}:
         con.execute("INSERT OR IGNORE INTO entry_tags VALUES (?,?)",
                    (rowid, tag))

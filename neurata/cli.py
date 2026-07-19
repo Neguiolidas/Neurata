@@ -9,9 +9,10 @@ from neurata.deposit import DepositError, deposit
 from neurata.doctor import exit_code, run_checks
 from neurata.entryref import EntryAmbiguousError, EntryNotFoundError
 from neurata.expand import ExpandError, expand
+from neurata.harvest import REGISTRY, harvest as run_harvest
 from neurata.home import CONTRACT_VERSION, NeurataHome
 from neurata.config import ConfigError
-from neurata.indexdb import FTS5MissingError, LockHeldError
+from neurata.indexdb import FTS5MissingError, IndexSchemaError, LockHeldError
 from neurata.query import QueryError, query
 from neurata.reindex import reindex
 from neurata.shelf import conflicts as shelf_conflicts
@@ -50,7 +51,7 @@ def main(argv: "list[str] | None" = None) -> int:
         return 1
     except (ConfigError, DepositError, EntryAmbiguousError,
             EntryNotFoundError, ExpandError, FTS5MissingError,
-            LockHeldError, QueryError, OSError) as exc:
+            IndexSchemaError, LockHeldError, QueryError, OSError) as exc:
         _emit_error(args, exc)
         return 2
     except Exception as exc:  # nunca vaza traceback pela CLI
@@ -93,6 +94,9 @@ def _dispatch(args: argparse.Namespace, home: NeurataHome) -> tuple[dict, int]:
         report = curate_tick(home, budget=args.budget)
         result = dataclasses.asdict(report)
         return result, (2 if report.errors else 0)
+    if args.command == "harvest":
+        report = run_harvest(home, args.target)
+        return dataclasses.asdict(report), 0
     raise AssertionError(f"comando desconhecido: {args.command}")
 
 
@@ -162,6 +166,14 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="corta a N itens do inbox (default: tudo)")
     tck.add_argument("--json", action="store_true",
                      default=argparse.SUPPRESS)
+
+    hrv = sub.add_parser("harvest",
+                         help="providers externos → inbox (utilitário)")
+    hrv.add_argument("target", nargs="?", default="claude-code",
+                     choices=tuple(REGISTRY),
+                     help="fonte a colher (default: claude-code)")
+    hrv.add_argument("--json", action="store_true",
+                     default=argparse.SUPPRESS)
     return parser
 
 
@@ -171,7 +183,7 @@ def _emit(args: argparse.Namespace, result: dict, rc: int = 0) -> None:
         # checks "fail"; tick: item errors) — nesses casos o envelope
         # precisa refletir a falha em `ok`, não só no exit code, senão
         # consumidores que checam só `ok` leem êxito.
-        ok = rc == 0 if args.command in ("doctor", "tick") else True
+        ok = rc == 0 if args.command in ("doctor", "tick", "harvest") else True
         print(json.dumps({"contract_version": CONTRACT_VERSION, "ok": ok,
                           "command": args.command, "result": result},
                          ensure_ascii=False))
@@ -196,6 +208,10 @@ def _emit(args: argparse.Namespace, result: dict, rc: int = 0) -> None:
         return
     if args.command == "expand" and "text" in result:
         print(result["text"])
+        return
+    if args.command == "harvest":
+        print(f"harvested={result['harvested']} updated={result['updated']} "
+             f"removed={result['removed']} skipped={len(result['skipped'])}")
         return
     if args.command == "shelf":
         if args.conflicts:
