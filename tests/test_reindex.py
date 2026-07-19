@@ -140,3 +140,64 @@ def test_alias_indexed_and_searchable(tmp_path):
     hits = con.execute("SELECT rowid FROM entries_fts WHERE entries_fts"
                        " MATCH 'aliases:hybrid'").fetchall()
     assert len(hits) == 1
+
+
+def test_reindex_populates_source_key(tmp_path):
+    home = _home(tmp_path)
+    (home.library / "s.md").write_text(
+        "---\nid: 01SK\ntitle: Skill X\nsource_key: claude-code:x\n"
+        "---\ncorpo\n")
+    reindex(home)
+    con = connect(home)
+    row = con.execute(
+        "SELECT source_key FROM entries WHERE slug='s'").fetchone()
+    assert row[0] == "claude-code:x"
+
+
+def test_reindex_source_key_null_when_absent(tmp_path):
+    home = _home(tmp_path)
+    (home.library / "n.md").write_text(
+        "---\nid: 01NK\ntitle: Nota Normal\n---\ncorpo\n")
+    reindex(home)
+    con = connect(home)
+    row = con.execute(
+        "SELECT source_key FROM entries WHERE slug='n'").fetchone()
+    assert row[0] is None
+
+
+def test_reindex_rebuilds_v5_index_to_v6(tmp_path):
+    from neurata.indexdb import INDEX_SCHEMA_VERSION
+
+    home = _home(tmp_path)
+    (home.library / "a.md").write_text("---\nid: 01A\ntitle: A\n---\nx\n")
+    con = connect(home)
+    # simula índice v5 pré-existente: derruba a coluna source_key
+    # recriando a tabela entries sem ela, e grava meta version=5.
+    con.executescript(
+        "DROP TABLE entries; DROP TABLE entries_fts;"
+        "CREATE TABLE entries(rowid INTEGER PRIMARY KEY, id TEXT NOT NULL"
+        " UNIQUE, slug TEXT NOT NULL UNIQUE, path TEXT NOT NULL,"
+        " location TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'note',"
+        " env TEXT NOT NULL DEFAULT 'generic', title TEXT NOT NULL,"
+        " description TEXT NOT NULL DEFAULT '', project TEXT,"
+        " content_hash TEXT NOT NULL, created TEXT NOT NULL,"
+        " updated TEXT NOT NULL,"
+        " grain_quality TEXT NOT NULL DEFAULT 'mechanical',"
+        " shingles TEXT NOT NULL);"
+        "CREATE VIRTUAL TABLE entries_fts USING fts5(title, aliases, tags,"
+        " body, title_norm, aliases_norm, tags_norm, body_norm,"
+        " prefix='2 3 4');")
+    con.execute(
+        "INSERT OR REPLACE INTO meta VALUES ('index_schema_version', '5')")
+    con.commit()
+    con.close()
+
+    result = reindex(home)
+    assert result["indexed"] == 1
+    con = connect(home)
+    cols = {r[1] for r in con.execute("PRAGMA table_info(entries)")}
+    assert "source_key" in cols
+    version = con.execute(
+        "SELECT value FROM meta WHERE key='index_schema_version'"
+    ).fetchone()[0]
+    assert version == str(INDEX_SCHEMA_VERSION) == "6"
