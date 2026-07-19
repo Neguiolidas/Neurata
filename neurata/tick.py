@@ -58,7 +58,7 @@ def curate_tick(home: NeurataHome, budget: "int | None" = None) -> TickReport:
         con = connect(home)
         try:
             try:
-                indexdb.check_schema(con)
+                indexdb.check_schema(con, require_reindexed=False)
             except indexdb.IndexSchemaError as exc:
                 raise TickStructuralError(str(exc)) from exc
 

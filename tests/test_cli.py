@@ -359,3 +359,88 @@ def test_shelf_human_output(tmp_path, monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "candidato-arquivamento" in out
+
+
+def test_tick_json_empty_inbox_is_noop(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    rc = main(["tick", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True and out["command"] == "tick"
+    assert out["result"]["processed"] == 0
+    assert out["result"]["errors"] == []
+
+
+def test_tick_json_catalogs_inbox_item(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "conteúdo bruto"])
+    capsys.readouterr()
+
+    rc = main(["tick", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    result = out["result"]
+    assert result["processed"] == 1
+    assert not list((tmp_path / "inbox").glob("*.md"))
+    assert list((tmp_path / "library").glob("*.md"))
+
+
+def test_tick_human_output(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "conteúdo humano"])
+    capsys.readouterr()
+
+    rc = main(["tick"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "processed=1" in out
+
+
+def test_tick_budget_flag(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "um"])
+    main(["deposit", "dois"])
+    capsys.readouterr()
+
+    rc = main(["tick", "--budget", "1", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["result"]["processed"] == 1
+    assert len(list((tmp_path / "inbox").glob("*.md"))) == 1
+
+
+def test_tick_exit_code_2_on_item_errors(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    from neurata.home import NeurataHome
+    home = NeurataHome(tmp_path)
+    home.init()
+    bad_target = tmp_path / "fora_da_inbox.md"
+    bad_target.write_text("alvo fora do inbox\n")
+    (home.inbox / "link.md").symlink_to(bad_target)
+    capsys.readouterr()
+
+    rc = main(["tick", "--json"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["result"]["errors"]
+
+
+def test_tick_exit_code_1_on_structural_failure(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    from neurata.home import NeurataHome
+    from neurata.indexdb import connect
+    home = NeurataHome(tmp_path)
+    home.init()
+    con = connect(home)
+    con.execute("INSERT OR REPLACE INTO meta VALUES "
+               "('index_schema_version', ?)", ("0",))
+    con.commit()
+    con.close()
+    capsys.readouterr()
+
+    rc = main(["tick", "--json"])
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["error"]["code"] == "TickStructuralError"

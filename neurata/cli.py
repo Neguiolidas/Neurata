@@ -17,6 +17,7 @@ from neurata.reindex import reindex
 from neurata.shelf import conflicts as shelf_conflicts
 from neurata.shelf import insights as shelf_insights
 from neurata.shelf import inventory as shelf_inventory
+from neurata.tick import TickStructuralError, curate_tick
 
 
 class UsageError(Exception):
@@ -44,6 +45,9 @@ def main(argv: "list[str] | None" = None) -> int:
         home = NeurataHome()
         home.init()
         result, rc = _dispatch(args, home)
+    except TickStructuralError as exc:
+        _emit_error(args, exc)
+        return 1
     except (ConfigError, DepositError, EntryAmbiguousError,
             EntryNotFoundError, ExpandError, FTS5MissingError,
             LockHeldError, QueryError, OSError) as exc:
@@ -85,6 +89,10 @@ def _dispatch(args: argparse.Namespace, home: NeurataHome) -> tuple[dict, int]:
         if args.insights:
             return shelf_insights(home), 0
         return shelf_inventory(home), 0
+    if args.command == "tick":
+        report = curate_tick(home, budget=args.budget)
+        result = dataclasses.asdict(report)
+        return result, (2 if report.errors else 0)
     raise AssertionError(f"comando desconhecido: {args.command}")
 
 
@@ -146,15 +154,24 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="conflicts_with + colisões id/slug")
     shf.add_argument("--json", action="store_true",
                      default=argparse.SUPPRESS)
+
+    tck = sub.add_parser("tick",
+                         help="inbox → library, curadoria mecânica "
+                              "(utilitário)")
+    tck.add_argument("--budget", type=int, default=None,
+                     help="corta a N itens do inbox (default: tudo)")
+    tck.add_argument("--json", action="store_true",
+                     default=argparse.SUPPRESS)
     return parser
 
 
 def _emit(args: argparse.Namespace, result: dict, rc: int = 0) -> None:
     if getattr(args, "json", False):
-        # doctor pode terminar rc != 0 sem lançar exceção (checks "fail");
-        # nesse caso o envelope precisa refletir a falha em `ok`, não só
-        # no exit code — senão consumidores que checam só `ok` leem êxito.
-        ok = rc == 0 if args.command == "doctor" else True
+        # doctor e tick podem terminar rc != 0 sem lançar exceção (doctor:
+        # checks "fail"; tick: item errors) — nesses casos o envelope
+        # precisa refletir a falha em `ok`, não só no exit code, senão
+        # consumidores que checam só `ok` leem êxito.
+        ok = rc == 0 if args.command in ("doctor", "tick") else True
         print(json.dumps({"contract_version": CONTRACT_VERSION, "ok": ok,
                           "command": args.command, "result": result},
                          ensure_ascii=False))

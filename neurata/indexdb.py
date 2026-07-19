@@ -104,8 +104,16 @@ def create_schema(con: sqlite3.Connection) -> None:
     con.commit()
 
 
-def check_schema(con: sqlite3.Connection) -> None:
-    """Levanta se o índice não existe ou está em versão != atual.
+def check_schema(con: sqlite3.Connection,
+                 require_reindexed: bool = True) -> None:
+    """Levanta se o índice está em versão != atual (schema corrompido/
+    antigo) — sempre, independente de `require_reindexed`. Se ainda não
+    houver linha de versão (índice nunca reindexado), só levanta quando
+    `require_reindexed=True` (comportamento de `query`, que exige dados
+    já indexados pra buscar). `tick` passa `require_reindexed=False`:
+    um NEURATA_HOME recém-inicializado, nunca reindexado, não é uma
+    falha estrutural pra curadoria mecânica — é só ausência de dados
+    (shingle_sets vazio), tratado normalmente pelo dedup.
 
     SELECT puro no meta — zero efeito colateral. Público (promovido de
     `query._check_schema`) pra `tick` também poder validar na entrada
@@ -114,7 +122,13 @@ def check_schema(con: sqlite3.Connection) -> None:
     """
     row = con.execute(
         "SELECT value FROM meta WHERE key='index_schema_version'").fetchone()
-    if row is None or str(row[0]) != str(INDEX_SCHEMA_VERSION):
+    if row is None:
+        if require_reindexed:
+            raise IndexSchemaError(
+                "índice ausente ou em schema antigo — rode "
+                "`neurata reindex`")
+        return
+    if str(row[0]) != str(INDEX_SCHEMA_VERSION):
         raise IndexSchemaError(
             "índice ausente ou em schema antigo — rode `neurata reindex`")
 
