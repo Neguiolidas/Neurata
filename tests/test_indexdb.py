@@ -126,3 +126,43 @@ def test_load_shingle_sets_roundtrip(tmp_path):
     assert sets["u1"] == frozenset({"aa", "bb"})
     assert sets["u2"] == frozenset()
     assert isinstance(sets["u1"], frozenset)
+
+
+# Phase 1 — Schema v6: source_key column tests
+
+def test_create_schema_has_source_key_column(tmp_path):
+    """Teste RED: create_schema deve criar entries com coluna source_key."""
+    con = connect(_home(tmp_path))
+    columns = con.execute("PRAGMA table_info(entries)").fetchall()
+    column_names = [col[1] for col in columns]
+    assert "source_key" in column_names
+
+
+def test_index_schema_version_is_6():
+    """Teste RED: INDEX_SCHEMA_VERSION deve ser 6."""
+    assert INDEX_SCHEMA_VERSION == 6
+
+
+def test_check_schema_raises_on_v5_index(tmp_path):
+    """Teste RED: check_schema com índice v5 deve levantar IndexSchemaError."""
+    con = connect(_home(tmp_path))
+    con.execute("INSERT OR REPLACE INTO meta VALUES ('index_schema_version',"
+                " ?)", (str(5),))
+    con.commit()
+    with pytest.raises(IndexSchemaError):
+        check_schema(con)
+
+
+def test_check_schema_not_requiring_reindexed_with_never_reindexed(tmp_path):
+    """Teste RED: check_schema(require_reindexed=False) com índice nunca-reindexado não deve levantar."""
+    con = connect(_home(tmp_path))
+    # Não gravar versão na meta — simula índice nunca reindexado
+    check_schema(con, require_reindexed=False)  # não deve levantar
+
+
+def test_check_schema_requiring_reindexed_with_never_reindexed(tmp_path):
+    """Teste RED: check_schema(require_reindexed=True) com índice nunca-reindexado deve levantar."""
+    con = connect(_home(tmp_path))
+    # Não gravar versão na meta — simula índice nunca reindexado
+    with pytest.raises(IndexSchemaError):
+        check_schema(con, require_reindexed=True)
