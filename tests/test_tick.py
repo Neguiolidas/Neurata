@@ -39,6 +39,29 @@ def _journal(home):
     return home.read_log("journal")
 
 
+# ── TickReport.snapshot (v0.6, T3) ──────────────────────────────────
+
+def test_tick_report_snapshot_field_defaults_to_none():
+    report = TickReport(tick="01JTICK0000000000000000000")
+    assert report.snapshot is None
+
+
+def test_tick_report_snapshot_field_accepts_sha_string():
+    report = TickReport(tick="01JTICK0000000000000000000",
+                        snapshot="abc123def456")
+    assert report.snapshot == "abc123def456"
+
+
+def test_curate_tick_leaves_snapshot_none_when_not_wired_yet(tmp_path):
+    # T3 só adiciona o campo; a integração (§4 do spec — ensure_repo +
+    # commit_tick dentro do IndexLock) é escopo do T4. Até lá,
+    # curate_tick não deve tocar report.snapshot.
+    home = _home(tmp_path)
+    _inbox(home, "a.md", "# Nota\n\nCorpo qualquer com texto suficiente.\n")
+    report = curate_tick(home)
+    assert report.snapshot is None
+
+
 # ── §1 pipeline geral ────────────────────────────────────────────────
 
 def test_budget_cuts_and_rerun_completes(tmp_path):

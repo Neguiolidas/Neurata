@@ -5,8 +5,13 @@ import subprocess
 import pytest
 
 from neurata import snapshot
-from neurata.home import NeurataHome
-from neurata.snapshot import commit, ensure_repo, git_available, has_changes, set_remote
+from neurata.home import CONTRACT_VERSION, NeurataHome, SCHEMA_VERSION
+from neurata.indexdb import INDEX_SCHEMA_VERSION
+from neurata.snapshot import (
+    _tick_body, _tick_subject, commit, commit_tick, ensure_repo,
+    git_available, has_changes, set_remote,
+)
+from neurata.tick import TickReport
 
 
 def _home(tmp_path):
@@ -118,3 +123,127 @@ def test_set_remote_add_then_update(tmp_path):
         ["git", "-C", str(home.library), "remote", "get-url", "neurata"],
         capture_output=True, text=True, check=True).stdout.strip()
     assert url == "https://example.invalid/b.git"
+
+
+# ── _tick_subject / _tick_body / commit_tick (spec §3+§4) ────────────
+#
+# `TickReport` real (não um fake) porque a regra de negócio ("duck-typing
+# no snapshot.py") é sobre o *módulo* snapshot.py não importar tick.py —
+# não impede o teste (leaf, sem risco de ciclo) de exercitar a integração
+# real dos dois tipos.
+
+def test_tick_subject_lists_nonzero_categories_in_fixed_order():
+    report = TickReport(tick="01JTICK0000000000000000000", processed=3,
+                        literate=2, updated=1, quarantined=2)
+    assert (_tick_subject(report) ==
+           "snapshot: +3 catalogados, ~1 atualizado, -2 quarentena")
+
+
+def test_tick_subject_includes_conflicts_and_renamed_signs_when_present():
+    report = TickReport(tick="01JTICK0000000000000000000",
+                        conflicts=1, renamed=4)
+    assert _tick_subject(report) == "snapshot: ⚠1 dup, →4 rename"
+
+
+def test_tick_subject_all_relevant_zero_falls_back_to_generic_message():
+    # stale>0 sozinho não conta pro subject (sem sinal definido pra ele).
+    report = TickReport(tick="01JTICK0000000000000000000", stale=5)
+    assert _tick_subject(report) == "snapshot: metadados atualizados"
+
+
+def test_tick_subject_zero_report_falls_back_to_generic_message():
+    report = TickReport(tick="01JTICK0000000000000000000")
+    assert _tick_subject(report) == "snapshot: metadados atualizados"
+
+
+def test_tick_body_shows_all_six_categories_with_extras_and_footer():
+    report = TickReport(tick="01JTICK0000000000000000000", processed=3,
+                        literate=2, updated=1, quarantined=2, conflicts=1,
+                        renamed=0, stale=0)
+    body = _tick_body(report)
+    assert body == (
+        "cataloga:    3  (2 alfabetizados)\n"
+        "atualiza:    1  (source-keyed in-place)\n"
+        "quarentena:  2  (duplicata exata)\n"
+        "near-dup:    1  (marcado conflito)\n"
+        "rename:      0\n"
+        "stale:       0\n"
+        "\n"
+        "tick: 01JTICK0000000000000000000\n"
+        f"schema: config={SCHEMA_VERSION} index={INDEX_SCHEMA_VERSION}"
+        f" contract={CONTRACT_VERSION}")
+
+
+def test_tick_body_omits_parenthetical_extras_when_counts_zero():
+    report = TickReport(tick="01JTICK0000000000000000000")
+    body = _tick_body(report)
+    for line in body.splitlines()[:6]:
+        assert "(" not in line
+    assert body.splitlines()[0] == "cataloga:    0"
+
+
+def test_tick_body_processed_extra_gated_on_literate_not_processed():
+    # processed>0 sem nenhum alfabetizado (ex.: só órfãos/skill-items
+    # adotados) não deve exibir a glosa "(N alfabetizados)".
+    report = TickReport(tick="01JTICK0000000000000000000", processed=3,
+                        literate=0)
+    body = _tick_body(report)
+    assert body.splitlines()[0] == "cataloga:    3"
+
+
+def test_commit_tick_returns_none_when_tree_clean(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    report = TickReport(tick="01JTICK0000000000000000000", processed=3)
+    assert commit_tick(home, report) is None
+
+
+def test_commit_tick_without_git_returns_none(tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    monkeypatch.setenv("PATH", "/nonexistent-bin")
+    monkeypatch.setattr(snapshot, "_AVAIL", None)
+    report = TickReport(tick="01JTICK0000000000000000000", processed=1)
+    assert commit_tick(home, report) is None
+
+
+def test_commit_tick_creates_commit_with_subject_and_body(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    (home.library / "nota.md").write_text("conteudo\n")
+    report = TickReport(tick="01JTICK0000000000000000000", processed=1,
+                        literate=1)
+
+    sha = commit_tick(home, report)
+
+    assert sha is not None
+    log = subprocess.run(
+        ["git", "-C", str(home.library), "log", "-1", "--pretty=%s%n%b"],
+        capture_output=True, text=True, check=True).stdout
+    assert log.startswith("snapshot: +1 catalogados\n")
+    assert "cataloga:    1  (1 alfabetizados)" in log
+    assert f"tick: {report.tick}" in log
+
+
+def test_commit_tick_zero_report_but_dirty_tree_uses_metadata_fallback(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    (home.library / "nota.md").write_text("conteudo\n")
+    report = TickReport(tick="01JTICK0000000000000000000")  # todo-zero
+
+    sha = commit_tick(home, report)
+
+    assert sha is not None
+    subject = subprocess.run(
+        ["git", "-C", str(home.library), "log", "-1", "--pretty=%s"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    assert subject == "snapshot: metadados atualizados"
+
+
+def test_commit_tick_idempotent_second_call_without_changes_is_none(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    (home.library / "nota.md").write_text("conteudo\n")
+    report = TickReport(tick="01JTICK0000000000000000000", processed=1)
+    first = commit_tick(home, report)
+    assert first is not None
+    assert commit_tick(home, report) is None

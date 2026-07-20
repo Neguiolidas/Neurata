@@ -49,6 +49,7 @@ class TickReport:
     stale: int = 0       # tombstone marcou entry como stale (§5)
     errors: "list[ItemError]" = field(default_factory=list)
     duration_ms: int = 0
+    snapshot: "str | None" = None  # sha do commit deste tick, ou None (v0.6)
 
 
 def curate_tick(home: NeurataHome, budget: "int | None" = None) -> TickReport:
