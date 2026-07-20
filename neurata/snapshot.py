@@ -53,7 +53,10 @@ def ensure_repo(home) -> bool:
     _run(home, "config", "commit.gpgsign", "false")
     _run(home, "config", "core.autocrlf", "false")
     _run(home, "config", "core.hooksPath", "/dev/null")
-    return True
+    # Return estado REAL: se init falhou (lib ausente/permissão/disco) o
+    # .git não existe — não mentir "pronto" (senão commit degrada a None
+    # silencioso sem log). best-effort honesto.
+    return (home.library / ".git").exists()
 
 
 def has_changes(home) -> bool:

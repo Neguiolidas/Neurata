@@ -45,6 +45,15 @@ def test_ensure_repo_creates_git_once_and_is_idempotent(tmp_path, monkeypatch):
     assert calls == []
 
 
+def test_ensure_repo_returns_false_when_init_fails(tmp_path, monkeypatch):
+    # git disponível, mas init vira no-op → .git nunca criado → não mentir.
+    home = _home(tmp_path)
+    monkeypatch.setattr(
+        snapshot, "_run",
+        lambda *a, **k: subprocess.CompletedProcess([], 1, "", "boom"))
+    assert ensure_repo(home) is False
+
+
 def test_ensure_repo_local_identity_isolated(tmp_path):
     home = _home(tmp_path)
     ensure_repo(home)
