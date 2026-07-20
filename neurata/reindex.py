@@ -31,6 +31,19 @@ _AMBIG = -1  # sentinela: título/alias casando 2+ entries
 
 
 def reindex(home: NeurataHome) -> dict:
+    with IndexLock(home):
+        con = connect(home)
+        try:
+            return _reindex_locked(home, con)
+        finally:
+            con.close()
+
+
+def _reindex_locked(home: NeurataHome, con: sqlite3.Connection) -> dict:
+    """Corpo do reindex assumindo IndexLock detido e `con` já aberto.
+
+    Caller (reindex() ou restore()) é responsável por lock/connect/close.
+    """
     start = time.monotonic()
     skipped: list[dict] = []
     indexed = edges = unresolved = ambiguous = 0
@@ -38,70 +51,65 @@ def reindex(home: NeurataHome) -> dict:
     by_title: dict[str, int] = {}
     by_alias: dict[str, int] = {}
     bodies: dict[int, str] = {}
-    with IndexLock(home):
-        con = connect(home)
-        try:
-            old_grains = _grains_snapshot(con)
-            drop_schema(con)
-            create_schema(con)
-            for location, base in (("library", home.library),
-                                   ("inbox", home.inbox)):
-                for path in sorted(base.rglob("*.md")):
-                    rel = str(path.relative_to(home.root))
-                    try:
-                        text = path.read_text(encoding="utf-8")
-                    except OSError:
-                        skipped.append({"path": rel, "reason": "unreadable"})
-                        continue
-                    except UnicodeDecodeError:
-                        skipped.append({"path": rel, "reason": "unparseable"})
-                        continue
-                    try:
-                        meta, body = parse(text)
-                    except FrontmatterError:
-                        skipped.append({"path": rel, "reason": "unparseable"})
-                        continue
-                    if not meta.get("id"):
-                        skipped.append({"path": rel, "reason": "missing-id"})
-                        continue
-                    slug = path.stem
-                    reason = _collision(con, str(meta["id"]), slug)
-                    if reason:
-                        skipped.append({"path": rel, "reason": reason})
-                        continue
-                    rowid = _insert(con, meta, body, rel, location, slug,
-                                     old_grains)
-                    indexed += 1
-                    by_slug[slug] = rowid
-                    _map_put(by_title, str(meta.get("title", slug)).lower(),
-                             rowid)
-                    for alias in _aliases(meta):
-                        _map_put(by_alias, alias.lower(), rowid)
-                    bodies[rowid] = body
-            for src in sorted(bodies):
-                for target in _link_targets(bodies[src]):
-                    dst = _resolve(target, by_slug, by_title, by_alias)
-                    if dst is None:
-                        unresolved += 1
-                    elif dst == _AMBIG:
-                        ambiguous += 1
-                    elif dst != src:
-                        cur = con.execute(
-                            "INSERT OR IGNORE INTO edges VALUES (?,?)",
-                            (src, dst))
-                        edges += cur.rowcount
-            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-            con.execute(
-                "INSERT OR REPLACE INTO meta VALUES ('last_reindex', ?)",
-                (now,))
-            con.execute("INSERT OR REPLACE INTO meta VALUES ('skipped', ?)",
-                        (json.dumps(skipped),))
-            con.execute("INSERT OR REPLACE INTO meta VALUES "
-                        "('index_schema_version', ?)",
-                        (str(INDEX_SCHEMA_VERSION),))
-            con.commit()
-        finally:
-            con.close()
+    old_grains = _grains_snapshot(con)
+    drop_schema(con)
+    create_schema(con)
+    for location, base in (("library", home.library),
+                           ("inbox", home.inbox)):
+        for path in sorted(base.rglob("*.md")):
+            rel = str(path.relative_to(home.root))
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError:
+                skipped.append({"path": rel, "reason": "unreadable"})
+                continue
+            except UnicodeDecodeError:
+                skipped.append({"path": rel, "reason": "unparseable"})
+                continue
+            try:
+                meta, body = parse(text)
+            except FrontmatterError:
+                skipped.append({"path": rel, "reason": "unparseable"})
+                continue
+            if not meta.get("id"):
+                skipped.append({"path": rel, "reason": "missing-id"})
+                continue
+            slug = path.stem
+            reason = _collision(con, str(meta["id"]), slug)
+            if reason:
+                skipped.append({"path": rel, "reason": reason})
+                continue
+            rowid = _insert(con, meta, body, rel, location, slug,
+                             old_grains)
+            indexed += 1
+            by_slug[slug] = rowid
+            _map_put(by_title, str(meta.get("title", slug)).lower(),
+                     rowid)
+            for alias in _aliases(meta):
+                _map_put(by_alias, alias.lower(), rowid)
+            bodies[rowid] = body
+    for src in sorted(bodies):
+        for target in _link_targets(bodies[src]):
+            dst = _resolve(target, by_slug, by_title, by_alias)
+            if dst is None:
+                unresolved += 1
+            elif dst == _AMBIG:
+                ambiguous += 1
+            elif dst != src:
+                cur = con.execute(
+                    "INSERT OR IGNORE INTO edges VALUES (?,?)",
+                    (src, dst))
+                edges += cur.rowcount
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    con.execute(
+        "INSERT OR REPLACE INTO meta VALUES ('last_reindex', ?)",
+        (now,))
+    con.execute("INSERT OR REPLACE INTO meta VALUES ('skipped', ?)",
+                (json.dumps(skipped),))
+    con.execute("INSERT OR REPLACE INTO meta VALUES "
+                "('index_schema_version', ?)",
+                (str(INDEX_SCHEMA_VERSION),))
+    con.commit()
     return {"indexed": indexed, "skipped": skipped, "edges": edges,
             "unresolved_links": unresolved, "ambiguous_links": ambiguous,
             "duration_ms": int((time.monotonic() - start) * 1000)}

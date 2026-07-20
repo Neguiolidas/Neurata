@@ -5,8 +5,8 @@ import pytest
 
 from neurata.deposit import deposit
 from neurata.home import NeurataHome
-from neurata.indexdb import connect
-from neurata.reindex import reindex
+from neurata.indexdb import IndexLock, connect
+from neurata.reindex import _reindex_locked, reindex
 
 
 def _home(tmp_path):
@@ -201,3 +201,25 @@ def test_reindex_rebuilds_v5_index_to_v6(tmp_path):
         "SELECT value FROM meta WHERE key='index_schema_version'"
     ).fetchone()[0]
     assert version == str(INDEX_SCHEMA_VERSION) == "6"
+
+
+def test_reindex_locked_matches_public_reindex(tmp_path):
+    home = _home(tmp_path)
+    (home.library / "a.md").write_text(
+        "---\nid: 01A\ntitle: A\naliases: [primeira]\n---\n"
+        "liga [[b]] e [[nada]].\n")
+    (home.library / "b.md").write_text(
+        "---\nid: 01B\ntitle: B\n---\nvolta [[primeira]].\n")
+    result = reindex(home)
+
+    with IndexLock(home):
+        con = connect(home)
+        try:
+            result2 = _reindex_locked(home, con)
+        finally:
+            con.close()
+
+    for key in ("indexed", "skipped", "edges", "unresolved_links",
+                "ambiguous_links"):
+        assert result2[key] == result[key]
+    assert isinstance(result2["duration_ms"], int)
