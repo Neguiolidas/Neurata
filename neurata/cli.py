@@ -11,13 +11,17 @@ from neurata.entryref import EntryAmbiguousError, EntryNotFoundError
 from neurata.expand import ExpandError, expand
 from neurata.harvest import REGISTRY, harvest as run_harvest
 from neurata.home import CONTRACT_VERSION, NeurataHome
-from neurata.config import ConfigError
+from neurata.config import ConfigError, load as load_config
 from neurata.indexdb import FTS5MissingError, IndexSchemaError, LockHeldError
 from neurata.query import QueryError, query
 from neurata.reindex import reindex
 from neurata.shelf import conflicts as shelf_conflicts
 from neurata.shelf import insights as shelf_insights
 from neurata.shelf import inventory as shelf_inventory
+from neurata.snapshot import (
+    SnapshotError, commit_manual, ensure_repo, list_snapshots, push,
+    restore, restore_dry_run, set_remote,
+)
 from neurata.tick import TickStructuralError, curate_tick
 
 
@@ -51,7 +55,8 @@ def main(argv: "list[str] | None" = None) -> int:
         return 1
     except (ConfigError, DepositError, EntryAmbiguousError,
             EntryNotFoundError, ExpandError, FTS5MissingError,
-            IndexSchemaError, LockHeldError, QueryError, OSError) as exc:
+            IndexSchemaError, LockHeldError, QueryError, SnapshotError,
+            OSError) as exc:
         _emit_error(args, exc)
         return 2
     except Exception as exc:  # nunca vaza traceback pela CLI
@@ -92,12 +97,89 @@ def _dispatch(args: argparse.Namespace, home: NeurataHome) -> tuple[dict, int]:
         return shelf_inventory(home), 0
     if args.command == "tick":
         report = curate_tick(home, budget=args.budget)
+        # auto_push §7.5: FORA do IndexLock (curate_tick já soltou o
+        # lock ao retornar) — rede/lento não pode alongar a seção
+        # crítica. Nunca propaga: falha vira log, tick permanece verde.
+        cfg = load_config(home)
+        snap_cfg = cfg["snapshot"]
+        if snap_cfg["auto_push"] and snap_cfg["remote"] and report.snapshot:
+            try:
+                push_result = push(home, remote_url=snap_cfg["remote"])
+                if not push_result.get("ok"):
+                    home.append_log("snapshot", {
+                        "tick": report.tick,
+                        "push_error": push_result.get("error")})
+            except Exception as exc:  # nunca deve propagar — tick verde
+                home.append_log("snapshot", {"tick": report.tick,
+                                             "push_error": str(exc)})
         result = dataclasses.asdict(report)
         return result, (2 if report.errors else 0)
     if args.command == "harvest":
         report = run_harvest(home, args.target)
         return dataclasses.asdict(report), 0
+    if args.command == "snapshot":
+        return _dispatch_snapshot(args, home)
     raise AssertionError(f"comando desconhecido: {args.command}")
+
+
+def _dispatch_snapshot(args: argparse.Namespace,
+                       home: NeurataHome) -> "tuple[dict, int]":
+    if args.set_remote:
+        return _snapshot_set_remote(args, home)
+    if args.list:
+        return _snapshot_list(args, home)
+    if args.restore:
+        return _snapshot_restore(args, home)
+    if args.push:
+        return _snapshot_push(args, home)
+    return commit_manual(home), 0
+
+
+def _snapshot_list(args: argparse.Namespace,
+                   home: NeurataHome) -> "tuple[dict, int]":
+    return {"ok": True,
+           "snapshots": list_snapshots(home, limit=args.limit)}, 0
+
+
+def _snapshot_restore(args: argparse.Namespace,
+                      home: NeurataHome) -> "tuple[dict, int]":
+    ref = args.restore
+    if not args.yes:
+        result = restore_dry_run(home, ref)
+        return result, (2 if result.get("error") else 1)
+    result = restore(home, ref)
+    return result, (0 if result.get("ok") else 2)
+
+
+def _snapshot_push(args: argparse.Namespace,
+                   home: NeurataHome) -> "tuple[dict, int]":
+    cfg = load_config(home)
+    result = push(home, remote_url=cfg["snapshot"].get("remote"))
+    return result, (0 if result.get("ok") else 2)
+
+
+def _snapshot_set_remote(args: argparse.Namespace,
+                         home: NeurataHome) -> "tuple[dict, int]":
+    ensure_repo(home)
+    set_remote(home, args.set_remote)
+    _persist_snapshot_remote(home, args.set_remote)
+    return {"ok": True, "remote": args.set_remote}, 0
+
+
+def _persist_snapshot_remote(home: NeurataHome, url: str) -> None:
+    """Grava `snapshot.remote` no `config.json` preservando as demais
+    chaves. NÃO usa `config.load()` + replace: esse dict funde com
+    `DEFAULTS` e omite `schema_version` de propósito (ver config.py) —
+    escrevê-lo de volta como está apagaria `schema_version` do arquivo."""
+    raw: dict = {}
+    if home.config_path.exists():
+        raw = json.loads(home.config_path.read_text(encoding="utf-8"))
+    snap = dict(raw.get("snapshot") or {})
+    snap["remote"] = url
+    raw["snapshot"] = snap
+    home.config_path.write_text(
+        json.dumps(raw, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -174,6 +256,24 @@ def _build_parser() -> argparse.ArgumentParser:
                      help="fonte a colher (default: claude-code)")
     hrv.add_argument("--json", action="store_true",
                      default=argparse.SUPPRESS)
+
+    snp = sub.add_parser("snapshot",
+                         help="git audit da library — commit manual, "
+                              "--list, --restore, --push, --set-remote")
+    snp.add_argument("--list", action="store_true",
+                     help="lista snapshots recentes")
+    snp.add_argument("-n", "--limit", type=int, default=20,
+                     help="máximo de snapshots com --list (default: 20)")
+    snp.add_argument("--restore", metavar="REF", default=None,
+                     help="restaura a library pro estado de REF")
+    snp.add_argument("--yes", action="store_true",
+                     help="confirma --restore (senão só mostra dry-run)")
+    snp.add_argument("--push", action="store_true",
+                     help="push explícito pro remote 'neurata'")
+    snp.add_argument("--set-remote", metavar="URL", default=None,
+                     help="configura o remote de push e grava no config")
+    snp.add_argument("--json", action="store_true",
+                     default=argparse.SUPPRESS)
     return parser
 
 
@@ -183,7 +283,8 @@ def _emit(args: argparse.Namespace, result: dict, rc: int = 0) -> None:
         # checks "fail"; tick: item errors) — nesses casos o envelope
         # precisa refletir a falha em `ok`, não só no exit code, senão
         # consumidores que checam só `ok` leem êxito.
-        ok = rc == 0 if args.command in ("doctor", "tick", "harvest") else True
+        ok = (rc == 0 if args.command in ("doctor", "tick", "harvest",
+                                          "snapshot") else True)
         print(json.dumps({"contract_version": CONTRACT_VERSION, "ok": ok,
                           "command": args.command, "result": result},
                          ensure_ascii=False))
@@ -212,6 +313,26 @@ def _emit(args: argparse.Namespace, result: dict, rc: int = 0) -> None:
     if args.command == "harvest":
         print(f"harvested={result['harvested']} updated={result['updated']} "
              f"removed={result['removed']} skipped={len(result['skipped'])}")
+        return
+    if args.command == "snapshot":
+        if "snapshots" in result:
+            for s in result["snapshots"]:
+                print(f"{s['sha']} {s['ts']} {s['subject']}")
+            if not result["snapshots"]:
+                print("(sem snapshots)")
+            return
+        if result.get("dry_run"):
+            print(f"dry-run restore -> {result['restored_to']} "
+                 f"(use --yes pra confirmar)")
+            print(result["would_change"] or "(sem diferenças)")
+            if result["dirty"]:
+                print("aviso: mudanças não-commitadas viram autosave")
+            return
+        if "error" in result:
+            print(f"erro: {result['error']}")
+            return
+        print(" ".join(f"{k}={v}" for k, v in result.items()
+                       if not isinstance(v, (list, dict))))
         return
     if args.command == "shelf":
         if args.conflicts:

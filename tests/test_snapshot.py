@@ -10,8 +10,9 @@ from neurata.indexdb import INDEX_SCHEMA_VERSION
 from neurata.query import query
 from neurata.reindex import reindex
 from neurata.snapshot import (
-    SnapshotError, _tick_body, _tick_subject, commit, commit_tick,
-    ensure_repo, git_available, has_changes, restore, set_remote,
+    SnapshotError, _tick_body, _tick_subject, commit, commit_manual,
+    commit_tick, ensure_repo, git_available, has_changes, list_snapshots,
+    push, restore, restore_dry_run, set_remote,
 )
 from neurata.tick import TickReport
 
@@ -439,3 +440,192 @@ def test_restore_reuses_reindex_locked_without_reopening_lock(tmp_path):
     # reindex() subsequente, que abre o IndexLock por conta própria,
     # roda sem travar.
     reindex(home)
+
+
+# ── list_snapshots / commit_manual / restore_dry_run (§7.1-7.3, Task 7) ──
+
+def test_list_snapshots_empty_when_no_repo(tmp_path):
+    home = _home(tmp_path)
+    assert list_snapshots(home) == []
+
+
+def test_list_snapshots_empty_without_git(tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    monkeypatch.setenv("PATH", "/nonexistent-bin")
+    monkeypatch.setattr(snapshot, "_AVAIL", None)
+    assert list_snapshots(home) == []
+
+
+def test_list_snapshots_most_recent_first_respects_limit(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "1")
+    commit(home, "feat: um")
+    _note(home, "b", "01B", "B", "2")
+    commit(home, "feat: dois")
+    _note(home, "c", "01C", "C", "3")
+    commit(home, "feat: tres")
+
+    out = list_snapshots(home, limit=2)
+
+    assert len(out) == 2
+    assert out[0]["subject"] == "feat: tres"
+    assert out[1]["subject"] == "feat: dois"
+    assert set(out[0]) == {"sha", "ts", "subject"}
+
+
+def test_commit_manual_noop_without_changes(tmp_path):
+    home = _home(tmp_path)
+    assert commit_manual(home) == {"ok": True, "snapshot": None,
+                                   "changed": False}
+
+
+def test_commit_manual_commits_dirty_tree_with_stat_body(tmp_path):
+    home = _home(tmp_path)
+    _note(home, "a", "01A", "A", "conteudo")
+
+    result = commit_manual(home)
+
+    assert result["ok"] is True
+    assert result["changed"] is True
+    assert result["snapshot"] is not None
+    log = subprocess.run(
+        ["git", "-C", str(home.library), "log", "-1", "--pretty=%s%n%b"],
+        capture_output=True, text=True, check=True).stdout
+    assert log.startswith("snapshot: manual (1 arquivos)\n")
+    assert "a.md" in log
+
+
+def test_commit_manual_second_call_without_new_changes_is_noop(tmp_path):
+    home = _home(tmp_path)
+    _note(home, "a", "01A", "A", "conteudo")
+    assert commit_manual(home)["changed"] is True
+    assert commit_manual(home) == {"ok": True, "snapshot": None,
+                                   "changed": False}
+
+
+def test_restore_dry_run_invalid_ref_is_error_and_never_mutates(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "x")
+    commit(home, "feat: a")
+    head_before = _head(home)
+
+    result = restore_dry_run(home, "no-such-ref")
+
+    assert result == {"ok": False, "restored_to": "no-such-ref",
+                      "error": "ref inválido: no-such-ref"}
+    assert _head(home) == head_before
+
+
+def test_restore_dry_run_valid_ref_shows_diff_stat_and_dirty_flag(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "v1")
+    ref1 = commit(home, "feat: v1")
+    _note(home, "a", "01A", "A", "v2")
+    commit(home, "feat: v2")
+    (home.library / "b.md").write_text("dirty\n")
+    head_before = _head(home)
+
+    result = restore_dry_run(home, ref1)
+
+    assert result["ok"] is False
+    assert result["dry_run"] is True
+    assert result["restored_to"] == ref1
+    assert "a.md" in result["would_change"]
+    assert result["dirty"] is True
+    # nada foi tocado: HEAD e o dirty extra continuam intactos.
+    assert _head(home) == head_before
+    assert (home.library / "b.md").exists()
+
+
+def test_restore_dry_run_clean_tree_has_dirty_flag_false(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "v1")
+    ref1 = commit(home, "feat: v1")
+
+    assert restore_dry_run(home, ref1)["dirty"] is False
+
+
+# ── push (§7.4/§7.5/§11 — file:// local, sem rede real) ─────────────
+
+def _bare_remote(tmp_path_factory):
+    remote_dir = tmp_path_factory.mktemp("remote") / "lib.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote_dir)],
+                  check=True)
+    return f"file://{remote_dir}"
+
+
+def test_push_without_git_returns_clear_error(tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    monkeypatch.setenv("PATH", "/nonexistent-bin")
+    monkeypatch.setattr(snapshot, "_AVAIL", None)
+
+    result = push(home)
+
+    assert result == {"ok": False, "pushed": False, "remote": None,
+                      "error": "git indisponível — instale git"}
+
+
+def test_push_without_repo_returns_error(tmp_path):
+    home = _home(tmp_path)
+    result = push(home)
+    assert result["ok"] is False
+    assert "não versionada" in result["error"]
+
+
+def test_push_without_remote_configured_asks_for_set_remote(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "x")
+    commit(home, "feat: a")
+
+    result = push(home)
+
+    assert result["ok"] is False
+    assert result["remote"] is None
+    assert "--set-remote" in result["error"]
+
+
+def test_push_succeeds_to_local_file_remote(tmp_path, tmp_path_factory):
+    remote_url = _bare_remote(tmp_path_factory)
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "x")
+    commit(home, "feat: a")
+    set_remote(home, remote_url)
+
+    assert push(home) == {"ok": True, "pushed": True, "remote": remote_url}
+
+
+def test_push_remote_url_param_syncs_git_remote_before_pushing(
+        tmp_path, tmp_path_factory):
+    remote_url = _bare_remote(tmp_path_factory)
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "x")
+    commit(home, "feat: a")
+
+    result = push(home, remote_url=remote_url)
+
+    assert result["ok"] is True
+    configured = subprocess.run(
+        ["git", "-C", str(home.library), "remote", "get-url", "neurata"],
+        capture_output=True, text=True, check=True).stdout.strip()
+    assert configured == remote_url
+
+
+def test_push_failure_reports_error_without_raising(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "x")
+    commit(home, "feat: a")
+    set_remote(home, "file:///nao/existe/nesse/caminho.git")
+
+    result = push(home)
+
+    assert result["ok"] is False
+    assert result["pushed"] is False
+    assert result["error"]

@@ -22,6 +22,7 @@ from neurata.indexdb import INDEX_SCHEMA_VERSION, IndexLock, connect
 from neurata.reindex import _reindex_locked
 
 GIT_TIMEOUT = 15  # commit/checkout local; push tem timeout próprio maior
+PUSH_TIMEOUT = 60  # rede: mais generoso que operações locais
 
 _AVAIL: "bool | None" = None
 
@@ -176,6 +177,46 @@ def commit_tick(home, report) -> "str | None":
     return commit(home, _tick_subject(report), _tick_body(report))
 
 
+def list_snapshots(home, limit: int = 20) -> "list[dict]":
+    """`git log` em `[{sha, ts, subject}]` (spec §7.2) — best-effort: sem
+    git ou repo vazio/inexistente devolve lista vazia, nunca levanta."""
+    if not git_available():
+        return []
+    proc = _run(home, "log", f"-n{limit}",
+               "--pretty=format:%h\x1f%cI\x1f%s")
+    if proc.returncode != 0 or not proc.stdout.strip():
+        return []
+    out = []
+    for line in proc.stdout.splitlines():
+        if not line:
+            continue
+        sha, ts, subject = line.split("\x1f", 2)
+        out.append({"sha": sha, "ts": ts, "subject": subject})
+    return out
+
+
+def commit_manual(home) -> dict:
+    """Commit manual do estado atual da library (spec §7.1), sob
+    `IndexLock` — mesmo lock que tick/restore usam, pra serializar contra
+    um tick concorrente (dois `git` na mesma library colidiriam no
+    `index.lock` do próprio git; o `IndexLock` do Neurata é a barreira de
+    verdade — spec §9). Subject `snapshot: manual (N arquivos)`, body =
+    `git diff --cached --stat` (spec §3). Sem git/sem mudança → no-op
+    silencioso (`snapshot: None, changed: False`), nunca erro (§2.1: só
+    `--push` explícito exige falha alta)."""
+    with IndexLock(home):
+        ensure_repo(home)
+        _run(home, "add", "-A")
+        names = _run(home, "diff", "--cached",
+                    "--name-only").stdout.splitlines()
+        n = len(names)
+        if n == 0:
+            return {"ok": True, "snapshot": None, "changed": False}
+        stat = _run(home, "diff", "--cached", "--stat").stdout.rstrip("\n")
+        sha = commit(home, f"snapshot: manual ({n} arquivos)", stat)
+        return {"ok": True, "snapshot": sha, "changed": sha is not None}
+
+
 def restore(home, ref: str) -> dict:
     """Restore atômico (spec §5) — materializa o tree de `ref` como um
     NOVO commit em `main` (forward-only; history nunca reescrita) e
@@ -234,9 +275,54 @@ def restore(home, ref: str) -> dict:
                 "new_head": new_head, "reindex": rx}
 
 
+def restore_dry_run(home, ref: str) -> dict:
+    """Preview de `restore` (spec §7.3) sem `--yes` — NUNCA muta HEAD nem
+    working tree. `ref` inválido → `{"ok": False, "error": ...}` (sem
+    tocar nada, igual ao `restore` real); ref válido → resumo do que o
+    restore de verdade faria: `diff --stat HEAD..<ref>` e se há dirty
+    (que viraria autosave)."""
+    ensure_repo(home)
+    verify = _run(home, "rev-parse", "--verify", f"{ref}^{{commit}}")
+    if verify.returncode != 0:
+        return {"ok": False, "restored_to": ref,
+                "error": f"ref inválido: {ref}"}
+    diff_stat = _run(home, "diff", "--stat",
+                     f"HEAD..{ref}").stdout.rstrip("\n")
+    return {"ok": False, "restored_to": ref, "dry_run": True,
+            "would_change": diff_stat, "dirty": has_changes(home)}
+
+
 def set_remote(home, url: str) -> None:
     proc = _run(home, "remote", "get-url", "neurata")
     if proc.returncode == 0:
         _run(home, "remote", "set-url", "neurata", url)
     else:
         _run(home, "remote", "add", "neurata", url)
+
+
+def push(home, *, remote_url: "str | None" = None) -> dict:
+    """Push best-effort pro remote `neurata` (spec §7.4/§7.5). Nunca
+    levanta — falha vira `{"ok": False, ..., "error": ...}` (o caller CLI
+    decide o exit code; o caminho auto do tick só loga). `remote_url`,
+    quando passado, sincroniza o remote git com o config ANTES do push
+    (cobre o caso do remote git ter sumido — ex.: `NEURATA_HOME` clonado
+    de novo, mas o `config.json` ainda lembra a url)."""
+    if not git_available():
+        return {"ok": False, "pushed": False, "remote": remote_url,
+                "error": "git indisponível — instale git"}
+    if not (home.library / ".git").exists():
+        return {"ok": False, "pushed": False, "remote": remote_url,
+                "error": "library não versionada — rode um tick ou "
+                        "`neurata snapshot`"}
+    if remote_url:
+        set_remote(home, remote_url)
+    proc = _run(home, "remote", "get-url", "neurata")
+    remote = proc.stdout.strip() if proc.returncode == 0 else None
+    if not remote:
+        return {"ok": False, "pushed": False, "remote": None,
+                "error": "remote não configurado — use --set-remote URL"}
+    pushed = _run(home, "push", "neurata", "main", timeout=PUSH_TIMEOUT)
+    if pushed.returncode != 0:
+        return {"ok": False, "pushed": False, "remote": remote,
+                "error": pushed.stderr.strip() or "push falhou"}
+    return {"ok": True, "pushed": True, "remote": remote}

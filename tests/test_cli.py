@@ -1,5 +1,6 @@
 """tests/test_cli.py"""
 import json
+import subprocess
 
 from neurata.cli import main
 
@@ -521,3 +522,273 @@ def test_harvest_schema_mismatch(tmp_path, monkeypatch, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is False
     assert "reindex" in out["error"]["message"]
+
+
+# ── snapshot: commit manual, --list, --restore, --push, --set-remote ──
+# (Task 7 / spec §7)
+
+def _first_lib_file(tmp_path):
+    return next((tmp_path / "library").glob("*.md"))
+
+
+def test_snapshot_manual_commit_json_noop_then_commits_dirty_change(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "algo", "--title", "T"])
+    main(["tick"])
+    capsys.readouterr()
+
+    # tick já commitou tudo — sem novas mudanças, snapshot manual é noop.
+    rc = main(["snapshot", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["contract_version"] == 3
+    assert out["ok"] is True
+    assert out["command"] == "snapshot"
+    assert out["result"] == {"ok": True, "snapshot": None, "changed": False}
+
+    # edição direta na library (fora do fluxo tick) -> commita.
+    lib_file = _first_lib_file(tmp_path)
+    lib_file.write_text(lib_file.read_text() + "\nlinha extra\n")
+
+    rc = main(["snapshot", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    assert out["result"]["changed"] is True
+    assert out["result"]["snapshot"] is not None
+
+
+def test_snapshot_human_output_manual_commit(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "algo"])
+    main(["tick"])
+    capsys.readouterr()
+
+    rc = main(["snapshot"])
+    assert rc == 0
+    assert "changed=False" in capsys.readouterr().out
+
+
+def test_snapshot_list_json_returns_recent_snapshots_and_respects_limit(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "um"])
+    main(["tick"])
+    capsys.readouterr()
+    main(["deposit", "dois"])
+    main(["tick"])
+    capsys.readouterr()
+
+    rc = main(["snapshot", "--list", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    snaps = out["result"]["snapshots"]
+    assert len(snaps) >= 2
+    assert set(snaps[0]) == {"sha", "ts", "subject"}
+
+    rc = main(["snapshot", "--list", "-n", "1", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert len(out["result"]["snapshots"]) == 1
+
+
+def test_snapshot_list_human_output(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "algo"])
+    main(["tick"])
+    capsys.readouterr()
+
+    rc = main(["snapshot", "--list"])
+    assert rc == 0
+    assert "snapshot:" in capsys.readouterr().out
+
+
+def test_snapshot_restore_without_yes_is_dry_run_and_never_mutates(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "conteudo v1", "--title", "T"])
+    main(["tick"])
+    capsys.readouterr()
+    main(["snapshot", "--list", "--json"])
+    ref1 = json.loads(capsys.readouterr().out)["result"]["snapshots"][0]["sha"]
+
+    lib_file = _first_lib_file(tmp_path)
+    before = lib_file.read_text()
+    lib_file.write_text(before + "\nmudanca sem commit\n")
+
+    rc = main(["snapshot", "--restore", ref1, "--json"])
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["result"]["dry_run"] is True
+    assert out["result"]["dirty"] is True
+    # nada foi tocado.
+    assert lib_file.read_text() == before + "\nmudanca sem commit\n"
+
+
+def test_snapshot_restore_dry_run_human_output(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "algo"])
+    main(["tick"])
+    capsys.readouterr()
+    main(["snapshot", "--list", "--json"])
+    ref1 = json.loads(capsys.readouterr().out)["result"]["snapshots"][0]["sha"]
+
+    rc = main(["snapshot", "--restore", ref1])
+    assert rc == 1
+    assert "dry-run" in capsys.readouterr().out
+
+
+def test_snapshot_restore_with_yes_materializes_ref(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "conteudo v1", "--title", "T"])
+    main(["tick"])
+    capsys.readouterr()
+    main(["snapshot", "--list", "--json"])
+    ref1 = json.loads(capsys.readouterr().out)["result"]["snapshots"][0]["sha"]
+
+    lib_file = _first_lib_file(tmp_path)
+    lib_file.write_text(lib_file.read_text().replace("v1", "v2 mutante"))
+    main(["snapshot", "--json"])  # commita v2
+    capsys.readouterr()
+
+    rc = main(["snapshot", "--restore", ref1, "--yes", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    assert out["result"]["restored_to"] == ref1
+    assert "reindex" in out["result"]
+    assert "v2 mutante" not in lib_file.read_text()
+
+
+def test_snapshot_restore_invalid_ref_without_yes_is_error_exit_2(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "algo"])
+    main(["tick"])
+    capsys.readouterr()
+
+    # Ref inválido é erro (tem "error" no result) mesmo sem --yes — dry-run
+    # só devolve rc=1 quando o ref é válido; rc=2 aqui, igual ao caminho
+    # --yes (ambos nunca mutam nada).
+    rc = main(["snapshot", "--restore", "no-such-ref", "--json"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert "no-such-ref" in out["result"]["error"]
+
+
+def test_snapshot_restore_invalid_ref_with_yes_raises_into_error_envelope(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "algo"])
+    main(["tick"])
+    capsys.readouterr()
+
+    rc = main(["snapshot", "--restore", "no-such-ref", "--yes", "--json"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["error"]["code"] == "SnapshotError"
+
+
+def test_snapshot_push_without_remote_returns_error_exit_2(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["deposit", "algo"])
+    main(["tick"])
+    capsys.readouterr()
+
+    rc = main(["snapshot", "--push", "--json"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert "--set-remote" in out["result"]["error"]
+
+
+def test_snapshot_set_remote_persists_config_and_push_succeeds(
+        tmp_path, tmp_path_factory, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    remote_dir = tmp_path_factory.mktemp("remote") / "lib.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote_dir)],
+                  check=True)
+    remote_url = f"file://{remote_dir}"
+
+    main(["deposit", "algo"])
+    main(["tick"])
+    capsys.readouterr()
+
+    rc = main(["snapshot", "--set-remote", remote_url, "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    assert out["result"]["remote"] == remote_url
+
+    cfg = json.loads((tmp_path / "config.json").read_text())
+    assert cfg["snapshot"]["remote"] == remote_url
+    assert "schema_version" in cfg  # preserva chave existente
+
+    rc = main(["snapshot", "--push", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    assert out["result"] == {"ok": True, "pushed": True, "remote": remote_url}
+
+
+def test_snapshot_auto_push_on_tick_pushes_to_configured_remote(
+        tmp_path, tmp_path_factory, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    remote_dir = tmp_path_factory.mktemp("remote") / "lib.git"
+    subprocess.run(["git", "init", "--bare", "-q", str(remote_dir)],
+                  check=True)
+    remote_url = f"file://{remote_dir}"
+
+    main(["snapshot", "--set-remote", remote_url])
+    capsys.readouterr()
+    cfg_path = tmp_path / "config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg["snapshot"]["auto_push"] = True
+    cfg_path.write_text(json.dumps(cfg))
+
+    main(["deposit", "algo pra versionar"])
+    capsys.readouterr()
+
+    rc = main(["tick", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    assert out["result"]["snapshot"] is not None
+
+    # o bare repo recém-criado tem HEAD apontando pro branch default do
+    # host (ex.: master), que nunca existe — checa direto o ref "main"
+    # (o branch que ensure_repo() usa), não HEAD.
+    remote_log = subprocess.run(
+        ["git", "-C", str(remote_dir), "log", "--oneline", "main"],
+        capture_output=True, text=True, check=True).stdout
+    assert remote_log.strip() != ""
+
+
+def test_snapshot_auto_push_failure_does_not_fail_tick_but_logs(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    main(["snapshot", "--set-remote", "file:///nao/existe/nesse/caminho.git"])
+    capsys.readouterr()
+    cfg_path = tmp_path / "config.json"
+    cfg = json.loads(cfg_path.read_text())
+    cfg["snapshot"]["auto_push"] = True
+    cfg_path.write_text(json.dumps(cfg))
+
+    main(["deposit", "algo"])
+    capsys.readouterr()
+
+    rc = main(["tick", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    assert out["result"]["snapshot"] is not None
+
+    log = (tmp_path / "logs" / "snapshot.jsonl").read_text()
+    assert "push_error" in log
