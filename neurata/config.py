@@ -18,10 +18,16 @@ DEFAULTS: dict = {
     "skill_boost": 1.5,
     "shelf": {"w_u": 1.0, "w_r": 1.0, "w_c": 0.5, "tau_dias": 30.0,
               "beta": 0.15},
+    "snapshot": {"remote": None, "auto_push": False},
 }
 # schema_version pertence ao config desde a fase 1 (home.init escreve).
 _TOP_KEYS = set(DEFAULTS) | {"schema_version"}
 _REMEDY = "corrija ou remova a chave em config.json (typo?)"
+# snapshot é subtree tipado (não numérico) — validado à parte, sem passar
+# por _require_number. bool é checado antes por isinstance direto: como o
+# tipo esperado de auto_push é `bool` (não `int`), isinstance(1, bool) já
+# retorna False, então não há o overlap bool/int que _require_number trata.
+_SNAPSHOT_TYPES = {"auto_push": bool, "remote": (str, type(None))}
 
 
 class ConfigError(ValueError):
@@ -48,7 +54,23 @@ def load(home: NeurataHome) -> dict:
         if key == "schema_version":
             continue
         default = DEFAULTS[key]
-        if isinstance(default, dict):
+        if key == "snapshot":
+            if not isinstance(val, dict):
+                raise ConfigError(
+                    f"config.json: {key} deve ser objeto — {_REMEDY}")
+            sub_unknown = sorted(set(val) - set(default))
+            if sub_unknown:
+                raise ConfigError(
+                    f"chave(s) desconhecida(s) em config.json "
+                    f"{key}: {sub_unknown} — {_REMEDY}")
+            for sk, sv in val.items():
+                expected = _SNAPSHOT_TYPES[sk]
+                if not isinstance(sv, expected):
+                    raise ConfigError(
+                        f"config.json: snapshot.{sk} tipo inválido — "
+                        f"{_REMEDY}")
+            cfg[key].update(val)
+        elif isinstance(default, dict):
             if not isinstance(val, dict):
                 raise ConfigError(
                     f"config.json: {key} deve ser objeto — {_REMEDY}")

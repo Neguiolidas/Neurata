@@ -60,3 +60,53 @@ def test_non_numeric_fails(tmp_path):
     home.config_path.write_text(json.dumps({"rrf_k": "x"}))
     with pytest.raises(ConfigError, match="num"):
         load(home)
+
+
+def test_shelf_non_numeric_still_fails(tmp_path):
+    """Regressão: subtree numérico (shelf) não deve ser desviado pro
+    ramo tipado de snapshot — continua validando via _require_number."""
+    home = _home(tmp_path)
+    home.config_path.write_text(json.dumps({"shelf": {"tau_dias": "x"}}))
+    with pytest.raises(ConfigError, match="num"):
+        load(home)
+
+
+def test_snapshot_default_when_missing(tmp_path):
+    cfg = load(_home(tmp_path))
+    assert cfg["snapshot"] == {"remote": None, "auto_push": False}
+
+
+def test_snapshot_valid_loads(tmp_path):
+    home = _home(tmp_path)
+    home.config_path.write_text(json.dumps(
+        {"snapshot": {"remote": "origin", "auto_push": True}}))
+    cfg = load(home)
+    assert cfg["snapshot"] == {"remote": "origin", "auto_push": True}
+
+
+def test_snapshot_auto_push_non_bool_fails(tmp_path):
+    home = _home(tmp_path)
+    home.config_path.write_text(json.dumps({"snapshot": {"auto_push": 1}}))
+    with pytest.raises(ConfigError, match="snapshot"):
+        load(home)
+
+
+def test_snapshot_auto_push_float_fails(tmp_path):
+    home = _home(tmp_path)
+    home.config_path.write_text(json.dumps({"snapshot": {"auto_push": 1.0}}))
+    with pytest.raises(ConfigError, match="snapshot"):
+        load(home)
+
+
+def test_snapshot_remote_non_str_fails(tmp_path):
+    home = _home(tmp_path)
+    home.config_path.write_text(json.dumps({"snapshot": {"remote": 5}}))
+    with pytest.raises(ConfigError, match="snapshot"):
+        load(home)
+
+
+def test_snapshot_unknown_subkey_fails(tmp_path):
+    home = _home(tmp_path)
+    home.config_path.write_text(json.dumps({"snapshot": {"branch": "main"}}))
+    with pytest.raises(ConfigError, match="desconhecida"):
+        load(home)
