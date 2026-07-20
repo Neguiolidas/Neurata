@@ -32,6 +32,8 @@ def test_reindex_and_doctor_flow(tmp_path, monkeypatch, capsys):
     rc = main(["reindex", "--json"])
     assert rc == 0
     assert json.loads(capsys.readouterr().out)["result"]["indexed"] == 1
+    main(["snapshot"])  # commit limpo -> snapshot check "ok" (senão warn/rc1)
+    capsys.readouterr()
     rc = main(["doctor", "--json"])
     out = json.loads(capsys.readouterr().out)
     assert rc == 0
@@ -88,6 +90,7 @@ def test_doctor_json_envelope_ok_reflects_rc(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
     main(["deposit", "algo"])
     main(["reindex"])
+    main(["snapshot"])  # commit limpo -> snapshot check "ok" (senão warn/rc1)
     capsys.readouterr()
 
     # Doctor tudo ok -> envelope ok:true.

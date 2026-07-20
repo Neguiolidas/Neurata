@@ -1,10 +1,11 @@
 """tests/test_doctor.py"""
+import json
 import os
 import sqlite3
 import time
 from datetime import datetime
 
-from neurata import archive
+from neurata import archive, snapshot
 from neurata.doctor import exit_code, run_checks
 from neurata.home import NeurataHome
 from neurata.reindex import reindex
@@ -23,6 +24,7 @@ def _by_name(checks):
 def test_healthy_home_all_ok(tmp_path):
     home = _home(tmp_path)
     reindex(home)
+    snapshot.commit_manual(home)  # repo + commit limpo -> snapshot check ok
     checks = _by_name(run_checks(home))
     for name in ("python-version", "home-layout", "config", "fts5", "index"):
         assert checks[name].status == "ok", name
@@ -74,7 +76,7 @@ def test_corrupt_index_fails_cleanly(tmp_path):
     home = _home(tmp_path)
     home.index_path.write_bytes(b"\x00lixo que nao e sqlite\xff\xfe")
     checks = run_checks(home)  # nao pode explodir
-    assert len(checks) == 12  # todos os checks presentes
+    assert len(checks) == 13  # todos os checks presentes (inclui snapshot)
     by = _by_name(checks)
     assert by["index"].status == "fail"
     assert by["index"].remedy
@@ -141,3 +143,44 @@ def test_usage_warns_on_corrupt_lines(tmp_path):
     checks = _by_name(run_checks(home))
     assert checks["usage"].status == "warn"
     assert "1" in checks["usage"].detail
+
+
+# ── snapshot (§8): nunca fail — degradação graciosa ──────────────────
+def test_snapshot_check_in_run_checks(tmp_path):
+    home = _home(tmp_path)
+    assert "snapshot" in [c.name for c in run_checks(home)]
+
+
+def test_snapshot_no_git_warns_never_fails(tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    monkeypatch.setattr(snapshot, "git_available", lambda: False)
+    check = _by_name(run_checks(home))["snapshot"]
+    assert check.status == "warn"
+    assert "git" in check.detail
+
+
+def test_snapshot_repo_not_init_warns(tmp_path):
+    home = _home(tmp_path)  # git disponível, mas nenhum tick rodou → sem .git
+    check = _by_name(run_checks(home))["snapshot"]
+    assert check.status == "warn"
+    assert "não inicializado" in check.detail
+
+
+def test_snapshot_repo_ok(tmp_path):
+    home = _home(tmp_path)
+    (home.library / "n.md").write_text("---\nid: n\n---\ncorpo\n",
+                                       encoding="utf-8")
+    snapshot.commit_manual(home)  # cria repo + 1 commit, tree limpo
+    check = _by_name(run_checks(home))["snapshot"]
+    assert check.status == "ok"
+    assert "1 snapshot(s)" in check.detail
+
+
+def test_snapshot_auto_push_without_remote_warns(tmp_path):
+    home = _home(tmp_path)
+    cfg = home.load_config()
+    cfg["snapshot"] = {"auto_push": True, "remote": None}
+    home.config_path.write_text(json.dumps(cfg))
+    check = _by_name(run_checks(home))["snapshot"]
+    assert check.status == "warn"
+    assert "auto_push" in check.detail

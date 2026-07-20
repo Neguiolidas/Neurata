@@ -5,12 +5,15 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from neurata import archive, config as query_config, usage
+from neurata import archive, config as query_config, snapshot, usage
 from neurata.frontmatter import FrontmatterError, parse as parse_frontmatter
 from neurata.home import SCHEMA_VERSION, NeurataHome
 from neurata.indexdb import INDEX_SCHEMA_VERSION, fts5_available
 
 _ARCHIVE_SAMPLE = 20
+# `git log` é O(commits); cap alto o bastante pra "contagem exata" na
+# prática (ninguém tem >10k snapshots), sem varrer history absurdo.
+_SNAPSHOT_LOG_CAP = 10_000
 
 
 @dataclass
@@ -35,6 +38,7 @@ def run_checks(home: NeurataHome) -> list[Check]:
     checks.append(_lock(home))
     checks.append(_archive(home))
     checks.append(_usage(home))
+    checks.append(_snapshot(home))
     return checks
 
 
@@ -230,3 +234,43 @@ def _lock(home: NeurataHome) -> Check:
         return Check("lock", "warn", "lock STALE (processo morto)",
                      "remova index.lock ou rode `neurata reindex` "
                      "(toma posse de lock stale)")
+
+
+def _snapshot(home: NeurataHome) -> Check:
+    """Saúde do snapshot git (spec §8). Nunca `fail`: snapshot é
+    best-effort, degradação graciosa — git ausente ou repo não-init são
+    `warn` informativos, não erro. Também surface config incoerente
+    (`auto_push` ligado sem `remote`) e mudanças ainda não-commitadas.
+    Não muta nada: só lê (`.git` existe? `git log`? `status`?), nunca
+    inicializa o repo (isso é trabalho do primeiro `tick`)."""
+    try:
+        snap_cfg = home.load_config().get("snapshot", {})
+    except (OSError, ValueError):
+        snap_cfg = {}  # _config já reporta config ilegível — aqui degrada
+    auto_push = snap_cfg.get("auto_push", False)
+    remote = snap_cfg.get("remote")
+
+    if not snapshot.git_available():
+        return Check("snapshot", "warn", "git não disponível",
+                     "instale git para habilitar snapshots — opcional: sem "
+                     "git o Neurata roda normalmente, só não versiona")
+    if auto_push and not remote:
+        return Check("snapshot", "warn",
+                     "auto_push ligado sem remote configurado",
+                     "configure `neurata snapshot --set-remote <url>` ou "
+                     "desligue snapshot.auto_push em config.json")
+    if not (home.library / ".git").exists():
+        # warn (spec §8), mas self-heal-aware: dá ação imediata E avisa
+        # que o próximo tick cura sozinho — doctor não muta (nenhum check
+        # inicializa nada; init é trabalho do tick/snapshot).
+        return Check("snapshot", "warn", "repo não inicializado",
+                     "rode `neurata snapshot` pra versionar agora, ou "
+                     "deixe o próximo `neurata tick` inicializar sozinho "
+                     "(self-heal automático)")
+    snaps = snapshot.list_snapshots(home, limit=_SNAPSHOT_LOG_CAP)
+    head = snaps[0]["sha"] if snaps else "nenhum"
+    detail = f"{len(snaps)} snapshot(s), HEAD {head}"
+    if snapshot.has_changes(home):
+        return Check("snapshot", "warn", detail + ", mudanças não-commitadas",
+                     "mudanças serão commitadas no próximo `neurata tick`")
+    return Check("snapshot", "ok", detail)
