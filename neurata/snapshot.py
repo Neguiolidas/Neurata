@@ -12,7 +12,14 @@ só acessam atributos (`report.processed` etc.), nunca `isinstance`.
 import subprocess
 
 from neurata.home import CONTRACT_VERSION, SCHEMA_VERSION
-from neurata.indexdb import INDEX_SCHEMA_VERSION
+from neurata.indexdb import INDEX_SCHEMA_VERSION, IndexLock, connect
+# Import top-level (não local): checado que `neurata.reindex` NÃO importa
+# `neurata.snapshot` nem `neurata.tick` — sem ciclo. Diferente do caso
+# `commit_tick`/`tick.py` (esse sim circular; daí o duck-typing citado
+# acima). `_reindex_locked` já é desenhado pra ser chamado por um caller
+# externo (reindex() ou restore()) que detém lock/conexão — ver docstring
+# dele em reindex.py.
+from neurata.reindex import _reindex_locked
 
 GIT_TIMEOUT = 15  # commit/checkout local; push tem timeout próprio maior
 
@@ -167,6 +174,64 @@ def commit_tick(home, report) -> "str | None":
     if not has_changes(home):
         return None
     return commit(home, _tick_subject(report), _tick_body(report))
+
+
+def restore(home, ref: str) -> dict:
+    """Restore atômico (spec §5) — materializa o tree de `ref` como um
+    NOVO commit em `main` (forward-only; history nunca reescrita) e
+    reindexa sob o MESMO `IndexLock` (um único lock pro método inteiro —
+    nunca reabre).
+
+    1. Valida `ref` via `rev-parse --verify <ref>^{commit}` (check=True)
+       — ref inexistente propaga `SnapshotError` ANTES de qualquer
+       mutação (tree e HEAD intocados).
+    2. Autosave: dirty pré-restore vira commit real em `main`
+       (recuperável por sha/reflog) — nunca perde estado sujo. `commit()`
+       já é no-op (`None`) se o tree estiver limpo.
+    3. Materializa o tree do ref **exatamente** via `read-tree -u
+       --reset` (índice + working tree viram o tree do ref, deletando
+       arquivos ausentes nele) — plumbing ancestral, sem fallback de
+       versão. NUNCA `checkout <ref> -- .` / `restore --source`: esses só
+       tocam paths que casam no estado atual e não deletam um arquivo
+       adicionado depois do ref (tree resultante ficaria != tree do ref).
+       Guard: se o tree do ref já é igual ao HEAD atual (`diff --quiet`)
+       não há nada a materializar — pula read-tree/commit,
+       `new_head=HEAD`.
+    4. Reindex sob o MESMO lock/conexão via `_reindex_locked` (nunca
+       reabre `IndexLock` nem chama `reindex()` público). Falha aqui é
+       capturada — o tree já está consistente em disco, só o índice
+       fica stale — retorna `ok:False` com `need:"reindex"`, sem
+       propagar (exceção nunca vaza meio-caminho).
+    """
+    with IndexLock(home):
+        ensure_repo(home)
+        _run(home, "rev-parse", "--verify", f"{ref}^{{commit}}", check=True)
+
+        autosaved = commit(home, "snapshot: autosave antes de restore")
+
+        if _run(home, "diff", "--quiet", ref, "HEAD").returncode == 0:
+            new_head = _run(home, "rev-parse", "HEAD",
+                            check=True).stdout.strip()
+        else:
+            _run(home, "read-tree", "-u", "--reset", ref, check=True)
+            short_ref = _run(home, "rev-parse", "--short=12", ref,
+                             check=True).stdout.strip()
+            commit(home, f"snapshot: restore para {short_ref}")
+            new_head = _run(home, "rev-parse", "HEAD",
+                            check=True).stdout.strip()
+
+        con = connect(home)
+        try:
+            rx = _reindex_locked(home, con)
+        except Exception as exc:
+            return {"ok": False, "restored_to": ref, "autosaved": autosaved,
+                    "new_head": new_head, "need": "reindex",
+                    "reindex_error": str(exc)}
+        finally:
+            con.close()
+
+        return {"ok": True, "restored_to": ref, "autosaved": autosaved,
+                "new_head": new_head, "reindex": rx}
 
 
 def set_remote(home, url: str) -> None:

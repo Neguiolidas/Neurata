@@ -7,9 +7,11 @@ import pytest
 from neurata import snapshot
 from neurata.home import CONTRACT_VERSION, NeurataHome, SCHEMA_VERSION
 from neurata.indexdb import INDEX_SCHEMA_VERSION
+from neurata.query import query
+from neurata.reindex import reindex
 from neurata.snapshot import (
-    _tick_body, _tick_subject, commit, commit_tick, ensure_repo,
-    git_available, has_changes, set_remote,
+    SnapshotError, _tick_body, _tick_subject, commit, commit_tick,
+    ensure_repo, git_available, has_changes, restore, set_remote,
 )
 from neurata.tick import TickReport
 
@@ -247,3 +249,193 @@ def test_commit_tick_idempotent_second_call_without_changes_is_none(tmp_path):
     first = commit_tick(home, report)
     assert first is not None
     assert commit_tick(home, report) is None
+
+
+# ── restore (spec §5 / Task 6) ────────────────────────────────────────
+
+def _note(home, name, nid, title, body):
+    (home.library / f"{name}.md").write_text(
+        f"---\nid: {nid}\ntitle: {title}\n---\n{body}\n")
+
+
+def _head(home):
+    return subprocess.run(
+        ["git", "-C", str(home.library), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _status(home):
+    return subprocess.run(
+        ["git", "-C", str(home.library), "status", "--porcelain"],
+        capture_output=True, text=True, check=True).stdout
+
+
+def _log_subjects(home):
+    return subprocess.run(
+        ["git", "-C", str(home.library), "log", "--format=%s"],
+        capture_output=True, text=True, check=True).stdout.splitlines()
+
+
+def _tracked(home):
+    return subprocess.run(
+        ["git", "-C", str(home.library), "ls-files"],
+        capture_output=True, text=True, check=True).stdout.split()
+
+
+def test_restore_unknown_ref_raises_and_leaves_tree_and_head_intact(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "conteudo a")
+    commit(home, "feat: a")
+    head_before = _head(home)
+    status_before = _status(home)
+
+    with pytest.raises(SnapshotError):
+        restore(home, "no-such-ref")
+
+    assert _head(home) == head_before
+    assert _status(home) == status_before
+    assert not (home.root / "index.lock").exists()
+
+
+def test_restore_autosaves_dirty_tree_before_materializing(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "conteudo original")
+    ref1 = commit(home, "feat: a")
+    (home.library / "a.md").write_text(
+        "---\nid: 01A\ntitle: A\n---\nconteudo sujo alterado\n")
+
+    result = restore(home, ref1)
+
+    assert result["ok"] is True
+    assert result["autosaved"] is not None
+    assert "snapshot: autosave antes de restore" in _log_subjects(home)
+    dirty_blob = subprocess.run(
+        ["git", "-C", str(home.library), "show",
+         f"{result['autosaved']}:a.md"],
+        capture_output=True, text=True, check=True).stdout
+    assert "conteudo sujo alterado" in dirty_blob
+    assert (home.library / "a.md").read_text() == (
+        "---\nid: 01A\ntitle: A\n---\nconteudo original\n")
+
+
+def test_restore_materializes_ref_tree_exactly_add_and_delete(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "manter", "01K", "Manter", "fica")
+    _note(home, "del-pos-ref", "01D", "Del", "volta")
+    ref1 = commit(home, "feat: estado 1")
+
+    (home.library / "del-pos-ref.md").unlink()
+    _note(home, "add-pos-ref", "01N", "Novo", "novo")
+    commit(home, "feat: estado 2")
+
+    result = restore(home, ref1)
+
+    assert result["ok"] is True
+    assert not (home.library / "add-pos-ref.md").exists()
+    assert (home.library / "del-pos-ref.md").read_text() == (
+        "---\nid: 01D\ntitle: Del\n---\nvolta\n")
+    assert (home.library / "manter.md").exists()
+    tracked = _tracked(home)
+    assert "add-pos-ref.md" not in tracked
+    assert "del-pos-ref.md" in tracked
+
+
+def test_restore_reindexes_and_query_finds_restored_state(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "nota", "01Q", "Nota Original", "texto original distintivo")
+    ref1 = commit(home, "feat: estado 1")
+    reindex(home)
+
+    _note(home, "nota", "01Q", "Nota Original", "texto mutante substituto")
+    commit(home, "feat: estado 2")
+    reindex(home)
+
+    result = restore(home, ref1)
+
+    assert result["ok"] is True
+    assert result["reindex"]["indexed"] == 1
+    res = query(home, "distintivo")["results"]
+    assert any(r["slug"] == "nota" for r in res)
+    assert query(home, "substituto")["results"] == []
+
+
+def test_restore_noop_when_ref_equals_head(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "x")
+    commit(home, "feat: a")
+    head_before = _head(home)
+
+    result = restore(home, head_before)
+
+    assert result["ok"] is True
+    assert result["restored_to"] == head_before
+    assert result["autosaved"] is None
+    assert result["new_head"] == head_before
+    assert "reindex" in result
+    assert _head(home) == head_before
+
+
+def test_restore_forward_only_head_advances_and_ref_stays_reachable(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "v1")
+    ref1 = commit(home, "feat: v1")
+    _note(home, "a", "01A", "A", "v2")
+    commit(home, "feat: v2")
+
+    result = restore(home, ref1)
+
+    new_head = result["new_head"]
+    assert new_head != ref1
+    ancestor = subprocess.run(
+        ["git", "-C", str(home.library), "merge-base", "--is-ancestor",
+         ref1, new_head])
+    assert ancestor.returncode == 0
+
+
+def test_restore_reindex_failure_returns_ok_false_without_raising(
+        tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "v1")
+    ref1 = commit(home, "feat: v1")
+    _note(home, "a", "01A", "A", "v2")
+    commit(home, "feat: v2")
+
+    def _boom(home_arg, con_arg):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(snapshot, "_reindex_locked", _boom)
+
+    result = restore(home, ref1)
+
+    assert result["ok"] is False
+    assert result["need"] == "reindex"
+    assert "boom" in result["reindex_error"]
+    # tree já materializado em disco apesar da falha do reindex
+    assert (home.library / "a.md").read_text() == (
+        "---\nid: 01A\ntitle: A\n---\nv1\n")
+    assert not (home.root / "index.lock").exists()
+
+
+def test_restore_reuses_reindex_locked_without_reopening_lock(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    _note(home, "a", "01A", "A", "v1")
+    ref1 = commit(home, "feat: v1")
+    _note(home, "a", "01A", "A", "v2")
+    commit(home, "feat: v2")
+
+    result = restore(home, ref1)
+
+    assert result["ok"] is True
+    assert not (home.root / "index.lock").exists()
+    # lock foi liberado corretamente (sem lock aninhado preso) — um
+    # reindex() subsequente, que abre o IndexLock por conta própria,
+    # roda sem travar.
+    reindex(home)
