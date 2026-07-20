@@ -52,14 +52,50 @@ def test_tick_report_snapshot_field_accepts_sha_string():
     assert report.snapshot == "abc123def456"
 
 
-def test_curate_tick_leaves_snapshot_none_when_not_wired_yet(tmp_path):
-    # T3 só adiciona o campo; a integração (§4 do spec — ensure_repo +
-    # commit_tick dentro do IndexLock) é escopo do T4. Até lá,
-    # curate_tick não deve tocar report.snapshot.
+def test_curate_tick_commits_snapshot_when_tree_dirty(tmp_path):
+    # T4: curate_tick chama ensure_repo+commit_tick dentro do IndexLock,
+    # após o con.close(). Árvore suja (novo arquivo na library) -> commita
+    # e popula report.snapshot com o sha curto do commit.
     home = _home(tmp_path)
     _inbox(home, "a.md", "# Nota\n\nCorpo qualquer com texto suficiente.\n")
     report = curate_tick(home)
+    assert report.snapshot is not None
+    assert len(report.snapshot) == 12
+    assert (home.library / ".git").exists()
+
+
+def test_curate_tick_snapshot_is_none_when_tree_clean(tmp_path):
+    # Segundo tick sem novidade no inbox: nada muda na library (já
+    # commitada pelo tick anterior) -> commit_tick vê tree limpa e
+    # devolve None, sem novo commit.
+    home = _home(tmp_path)
+    _inbox(home, "a.md", "# Nota\n\nCorpo qualquer com texto suficiente.\n")
+    first = curate_tick(home)
+    assert first.snapshot is not None
+    second = curate_tick(home)
+    assert second.snapshot is None
+
+
+def test_curate_tick_snapshot_failure_is_best_effort_and_logged(
+        tmp_path, monkeypatch):
+    # Falha do lado do git (ex.: commit_tick levanta) não pode derrubar o
+    # tick — best-effort loud: report.snapshot cai pra None e o incidente
+    # fica registrado em logs/snapshot.jsonl (com o tick_id do run).
+    home = _home(tmp_path)
+    _inbox(home, "a.md", "# Nota\n\nCorpo qualquer com texto suficiente.\n")
+
+    def boom(home_arg, report_arg):
+        raise RuntimeError("git explodiu")
+
+    monkeypatch.setattr("neurata.tick.commit_tick", boom)
+    report = curate_tick(home)
+
     assert report.snapshot is None
+    assert report.processed == 1  # o resto do tick correu normalmente
+    entries = home.read_log("snapshot")
+    assert len(entries) == 1
+    assert entries[0]["tick"] == report.tick
+    assert "git explodiu" in entries[0]["error"]
 
 
 # ── §1 pipeline geral ────────────────────────────────────────────────

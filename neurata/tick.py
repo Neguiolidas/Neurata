@@ -23,6 +23,7 @@ from neurata.dedup import NEAR_DUP_JACCARD, jaccard, shingle_hashes
 from neurata.frontmatter import FrontmatterError, parse, serialize
 from neurata.home import NeurataHome
 from neurata.indexdb import IndexLock, connect
+from neurata.snapshot import commit_tick, ensure_repo
 from neurata.textnorm import normalize, slugify
 from neurata.ulid import new_ulid
 
@@ -81,6 +82,13 @@ def curate_tick(home: NeurataHome, budget: "int | None" = None) -> TickReport:
                 _process_item(home, con, tick_id, path, report, shingle_sets)
         finally:
             con.close()
+
+        try:
+            if ensure_repo(home):
+                report.snapshot = commit_tick(home, report)
+        except Exception as exc:
+            home.append_log("snapshot", {"tick": tick_id, "error": str(exc)})
+            report.snapshot = None
 
     report.duration_ms = int((time.monotonic() - start) * 1000)
     return report

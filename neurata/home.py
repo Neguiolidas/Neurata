@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 SCHEMA_VERSION = 1
-CONTRACT_VERSION = 2  # v0.5: harvest emite envelope público novo (cli.py)
+CONTRACT_VERSION = 3  # v0.6: tick emite snapshot (sha do commit) no envelope
 
 _DIRS = ("library", "inbox", "archive", "quarantine", "logs")
 

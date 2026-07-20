@@ -17,7 +17,7 @@ def test_init_creates_layout(tmp_path):
         assert d.is_dir()
     cfg = home.load_config()
     assert cfg["schema_version"] == SCHEMA_VERSION
-    assert CONTRACT_VERSION == 2
+    assert CONTRACT_VERSION == 3
 
 
 def test_init_idempotent_preserves_config(tmp_path):
