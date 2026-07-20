@@ -12,7 +12,8 @@ from neurata.frontmatter import parse
 from neurata.home import NeurataHome
 from neurata.indexdb import connect
 from neurata.reindex import reindex
-from neurata.tick import TickStructuralError, curate_tick
+from neurata.tick import TickReport, TickStructuralError, curate_tick
+from neurata.tick import _sync_update_in_place
 
 
 def _home(tmp_path):
@@ -376,3 +377,221 @@ def test_missing_entries_paired_deterministically(tmp_path):
     # alfabética de caminho ("y-first" < "y-second").
     assert rows["01AAA0000000000000000"] == "library/y-first.md"
     assert rows["01BBB0000000000000000"] == "library/y-second.md"
+
+
+# ── Fase 5 (v0.5 harvest) — reconciliação source-keyed ───────────────
+
+def _skill_item(home, filename, entry_id, source_key, title, body,
+                description="desc"):
+    content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    text = (f"---\nid: {entry_id}\ntype: skill\nenv: claude-code\n"
+           f"title: {title}\ndescription: {description}\n"
+           f"source_key: {source_key}\nsource_path: /tmp/{title}\n"
+           f"created: 2026-01-01T00:00:00+00:00\n"
+           f"content_hash: {content_hash}\n---\n{body}")
+    (home.inbox / filename).write_text(text, encoding="utf-8")
+    return content_hash
+
+
+def _tombstone_item(home, filename, entry_id, source_key):
+    text = (f"---\nid: {entry_id}\ntype: skill-tombstone\n"
+           f"source_key: {source_key}\n"
+           f"created: 2026-01-01T00:00:00+00:00\n---\n")
+    (home.inbox / filename).write_text(text, encoding="utf-8")
+
+
+def _lib_skill_entry(home, filename, entry_id, source_key, title, body,
+                     description="desc", extra_meta=""):
+    content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    text = (f"---\nid: {entry_id}\ntype: skill\nenv: claude-code\n"
+           f"title: {title}\ndescription: {description}\n"
+           f"source_key: {source_key}\nsource_path: /tmp/{title}\n"
+           f"created: 2026-01-01T00:00:00+00:00\n"
+           f"updated: 2026-01-01T00:00:00+00:00\n"
+           f"content_hash: {content_hash}\n{extra_meta}---\n{body}")
+    (home.library / filename).write_text(text, encoding="utf-8")
+    return content_hash
+
+
+def test_skill_item_new_cataloged_with_source_key_no_near_dup(tmp_path):
+    home = _home(tmp_path)
+    words = [f"palavra{i}" for i in range(30)]
+    similar_body = " ".join(words) + ".\n"
+    _lib_entry(home, "base.md", "01LIBBASEID0000000000000", "Base",
+              similar_body)
+    reindex(home)
+    skill_body = " ".join(words + ["extra1", "extra2"]) + ".\n"
+    _skill_item(home, "skill.md", "01SKILLNEW0000000000000",
+               "claude-code:foo", "Foo Skill", skill_body)
+
+    report = curate_tick(home)
+
+    assert report.processed == 1
+    assert report.conflicts == 0
+    con = connect(home)
+    row = con.execute(
+        "SELECT source_key, type FROM entries WHERE"
+        " id='01SKILLNEW0000000000000'").fetchone()
+    assert row == ("claude-code:foo", "skill")
+    assert list(home.inbox.glob("*.md")) == []
+    journal = _journal(home)
+    assert any(r["verb"] == "catalog" and
+              r["item"] == "01SKILLNEW0000000000000" for r in journal)
+
+
+def test_skill_item_noop_when_hash_matches_library(tmp_path):
+    home = _home(tmp_path)
+    body = "Corpo estavel do skill sem mudanca nenhuma aqui.\n"
+    _lib_skill_entry(home, "foo.md", "01SKILLLIB000000000000",
+                    "claude-code:foo", "Foo Skill", body)
+    reindex(home)
+    original = (home.library / "foo.md").read_text()
+    _skill_item(home, "foo-new.md", "01SKILLNEWID00000000000",
+               "claude-code:foo", "Foo Skill", body)
+
+    report = curate_tick(home)
+
+    assert report.processed == 0
+    assert report.updated == 0
+    assert list(home.inbox.glob("*.md")) == []
+    assert (home.library / "foo.md").read_text() == original
+    assert _journal(home) == []
+
+
+def test_skill_item_update_in_place_preserves_id_slug_path(tmp_path):
+    home = _home(tmp_path)
+    old_body = "Corpo antigo do skill antes da atualizacao aqui.\n"
+    entry_id = "01SKILLUPDATE00000000000"
+    _lib_skill_entry(home, "foo.md", entry_id, "claude-code:foo",
+                    "Foo Skill", old_body)
+    reindex(home)
+    new_body = "Corpo novo do skill depois da atualizacao mudou aqui.\n"
+    _skill_item(home, "foo-new.md", "01SKILLINBOXNEW00000000",
+               "claude-code:foo", "Foo Skill Renomeado", new_body,
+               description="nova desc")
+
+    report = curate_tick(home)
+
+    assert report.updated == 1
+    assert list(home.inbox.glob("*.md")) == []
+    dest = home.library / "foo.md"
+    assert dest.exists()
+    meta, body = parse(dest.read_text())
+    assert body == new_body
+    assert meta["id"] == entry_id
+    assert meta["title"] == "Foo Skill Renomeado"
+    assert meta["description"] == "nova desc"
+    new_hash = hashlib.sha256(new_body.encode("utf-8")).hexdigest()
+    assert meta["content_hash"] == new_hash
+    con = connect(home)
+    row = con.execute(
+        "SELECT path, content_hash FROM entries WHERE id=?",
+        (entry_id,)).fetchone()
+    assert row == ("library/foo.md", new_hash)
+    journal = _journal(home)
+    upd = next(r for r in journal if r["verb"] == "update")
+    assert upd["src"] == "inbox/foo-new.md"
+    assert upd["dst"] == "library/foo.md"
+
+
+def test_skill_item_update_preserves_extra_frontmatter_keys(tmp_path):
+    home = _home(tmp_path)
+    old_body = "Corpo antigo do skill com chaves extras no frontmatter.\n"
+    entry_id = "01SKILLEXTRA000000000000"
+    _lib_skill_entry(home, "foo.md", entry_id, "claude-code:foo",
+                    "Foo Skill", old_body,
+                    extra_meta="conflicts_with: [01OUTRO000000000000000]\n"
+                               "cataloged: 2026-01-01T00:00:00+00:00\n"
+                               "origin: manual\n")
+    reindex(home)
+    new_body = "Corpo novo do skill que muda mas mantem chaves extras.\n"
+    _skill_item(home, "foo-new.md", "01SKILLINBOXEXTRA0000000",
+               "claude-code:foo", "Foo Skill", new_body)
+
+    report = curate_tick(home)
+
+    assert report.updated == 1
+    meta, body = parse((home.library / "foo.md").read_text())
+    assert body == new_body
+    assert meta["conflicts_with"] == ["01OUTRO000000000000000"]
+    assert meta["cataloged"] == "2026-01-01T00:00:00+00:00"
+    assert meta["origin"] == "manual"
+
+
+def test_sync_update_in_place_requires_source_key(tmp_path):
+    home = _home(tmp_path)
+    con = connect(home)
+    report = TickReport(tick="t")
+    with pytest.raises(AssertionError):
+        _sync_update_in_place(
+            home, con, "t", entry_id="x", slug="x",
+            lib_rel_path="library/x.md", source_key=None,
+            new_meta={}, new_body="", inbox_path=home.inbox / "x.md",
+            rel_src="inbox/x.md", report=report, shingle_sets={})
+
+
+def test_tombstone_marks_library_entry_stale(tmp_path):
+    home = _home(tmp_path)
+    body = "Corpo do skill que vai ficar obsoleto na fonte agora.\n"
+    entry_id = "01SKILLSTALE00000000000"
+    _lib_skill_entry(home, "foo.md", entry_id, "claude-code:foo",
+                    "Foo Skill", body)
+    reindex(home)
+    _tombstone_item(home, "tomb.md", "01TOMBID0000000000000000",
+                    "claude-code:foo")
+
+    report = curate_tick(home)
+
+    assert report.stale == 1
+    assert list(home.inbox.glob("*.md")) == []
+    meta, got_body = parse((home.library / "foo.md").read_text())
+    assert got_body == body
+    assert meta["stale"] == "true"
+    assert "stale_since" in meta
+    journal = _journal(home)
+    assert any(r["verb"] == "stale" and r["item"] == entry_id
+              for r in journal)
+
+
+def test_tombstone_nonexistent_source_key_noop(tmp_path):
+    home = _home(tmp_path)
+    _tombstone_item(home, "tomb.md", "01TOMBGHOST000000000000",
+                    "claude-code:inexistente")
+
+    report = curate_tick(home)
+
+    assert report.stale == 0
+    assert report.errors == []
+    assert list(home.inbox.glob("*.md")) == []
+    journal = _journal(home)
+    assert any(r["verb"] == "noop" for r in journal)
+
+
+def test_skill_renaissance_after_tombstone_clears_stale(tmp_path):
+    home = _home(tmp_path)
+    old_body = "Corpo original antes do skill ficar obsoleto aqui mesmo.\n"
+    entry_id = "01SKILLRENASCE000000000"
+    _lib_skill_entry(home, "foo.md", entry_id, "claude-code:foo",
+                    "Foo Skill", old_body)
+    reindex(home)
+    _tombstone_item(home, "tomb.md", "01TOMBRENASCE00000000000",
+                    "claude-code:foo")
+    curate_tick(home)
+    meta, _ = parse((home.library / "foo.md").read_text())
+    assert meta["stale"] == "true"
+
+    new_body = "Corpo novo depois que a skill foi re-colhida de novo.\n"
+    _skill_item(home, "foo-again.md", "01SKILLAGAIN000000000000",
+               "claude-code:foo", "Foo Skill", new_body)
+
+    report = curate_tick(home)
+
+    assert report.updated == 1
+    assert report.processed == 0
+    meta2, body2 = parse((home.library / "foo.md").read_text())
+    assert body2 == new_body
+    assert "stale" not in meta2
+    assert "stale_since" not in meta2
+    journal = _journal(home)
+    updates = [r for r in journal if r["verb"] == "update"]
+    assert len(updates) == 1

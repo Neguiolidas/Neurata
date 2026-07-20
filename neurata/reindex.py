@@ -174,26 +174,28 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
     aliases_text = " ".join(_aliases(meta))
     grain_quality = str(meta.get("grain_quality", "mechanical")) or "mechanical"
     shingles_json = json.dumps(shingle_hashes(body))
+    description = str(meta.get("description", ""))
+    fts_body = f"{description}\n\n{body}" if description else body
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
-        " grain_quality, shingles)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " grain_quality, shingles, source_key)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
-         title, str(meta.get("description", "")),
+         title, description,
          meta.get("project"), str(meta.get("content_hash", "")),
          str(meta.get("created", "")), str(meta.get("updated",
                                                     meta.get("created", ""))),
-         grain_quality, shingles_json))
+         grain_quality, shingles_json, meta.get("source_key")))
     rowid = cur.lastrowid
     assert rowid is not None  # INSERT sempre popula lastrowid
     con.execute(
         "INSERT INTO entries_fts(rowid, title, aliases, tags, body,"
         " title_norm, aliases_norm, tags_norm, body_norm)"
         " VALUES (?,?,?,?,?,?,?,?,?)",
-        (rowid, title, aliases_text, tags_text, body, normalize(title),
-         normalize(aliases_text), normalize(tags_text), normalize(body)))
+        (rowid, title, aliases_text, tags_text, fts_body, normalize(title),
+         normalize(aliases_text), normalize(tags_text), normalize(fts_body)))
     for tag in {t.lower() for t in tag_list}:
         con.execute("INSERT OR IGNORE INTO entry_tags VALUES (?,?)",
                     (rowid, tag))

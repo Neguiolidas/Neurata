@@ -15,8 +15,8 @@ _REMEDY = (
 
 # Versão do schema do ÍNDICE (meta 'index_schema_version'); distinta do
 # SCHEMA_VERSION do config em home.py. Só o reindex grava; check_schema
-# (público) checa — v5: coluna `shingles` (near-dup, Task 1/neurata.dedup).
-INDEX_SCHEMA_VERSION = 5
+# (público) checa — v6: coluna `source_key` (Phase 1/v0.5 harvest).
+INDEX_SCHEMA_VERSION = 6
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -53,7 +53,8 @@ CREATE TABLE IF NOT EXISTS entries(
   created TEXT NOT NULL,
   updated TEXT NOT NULL,
   grain_quality TEXT NOT NULL DEFAULT 'mechanical',
-  shingles TEXT NOT NULL
+  shingles TEXT NOT NULL,
+  source_key TEXT
 );
 """
 

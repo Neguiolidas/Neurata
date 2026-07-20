@@ -9,7 +9,7 @@ def test_deposit_json_roundtrip(tmp_path, monkeypatch, capsys):
     rc = main(["deposit", "conhecimento novo", "--title", "T", "--json"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["contract_version"] == 1
+    assert out["contract_version"] == 2
     assert out["ok"] is True
     assert out["command"] == "deposit"
     assert out["result"]["action"] == "created"
@@ -59,7 +59,7 @@ def test_json_flag_global_position(tmp_path, monkeypatch, capsys):
     rc = main(["--json", "deposit", "x"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["contract_version"] == 1
+    assert out["contract_version"] == 2
     assert out["ok"] is True
     assert out["command"] == "deposit"
     assert out["result"]["action"] == "created"
@@ -444,3 +444,77 @@ def test_tick_exit_code_1_on_structural_failure(tmp_path, monkeypatch, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is False
     assert out["error"]["code"] == "TickStructuralError"
+
+
+def _make_skill(base, name, description="faz coisas quando X"):
+    d = base / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {description}\n---\n"
+        f"Corpo de {name}.\n", encoding="utf-8")
+
+
+def test_harvest_default_target_human_output(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    skills_dir = tmp_path / "skills"
+    _make_skill(skills_dir, "foo")
+    monkeypatch.setenv("NEURATA_CLAUDE_SKILLS_DIR", str(skills_dir))
+    capsys.readouterr()
+
+    rc = main(["harvest"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "harvested=1 updated=0 removed=0 skipped=0" in out
+
+
+def test_harvest_json_envelope(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    skills_dir = tmp_path / "skills"
+    _make_skill(skills_dir, "foo")
+    monkeypatch.setenv("NEURATA_CLAUDE_SKILLS_DIR", str(skills_dir))
+    capsys.readouterr()
+
+    rc = main(["harvest", "claude-code", "--json"])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    assert out["command"] == "harvest"
+    result = out["result"]
+    assert result["target"] == "claude-code"
+    assert result["harvested"] == 1
+    assert result["updated"] == 0
+    assert result["removed"] == 0
+    assert result["skipped"] == []
+
+
+def test_harvest_bad_target(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    capsys.readouterr()
+
+    rc = main(["harvest", "bogus", "--json"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["error"]["code"] == "UsageError"
+    assert "invalid choice: 'bogus'" in out["error"]["message"]
+    assert "claude-code" in out["error"]["message"]
+
+
+def test_harvest_schema_mismatch(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    from neurata.home import NeurataHome
+    from neurata.indexdb import connect
+    home = NeurataHome(tmp_path)
+    home.init()
+    con = connect(home)
+    con.execute("INSERT OR REPLACE INTO meta VALUES "
+               "('index_schema_version', ?)", ("5",))
+    con.commit()
+    con.close()
+    capsys.readouterr()
+
+    rc = main(["harvest", "--json"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert "reindex" in out["error"]["message"]
