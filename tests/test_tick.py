@@ -14,6 +14,7 @@ from neurata.indexdb import connect
 from neurata.reindex import reindex
 from neurata.tick import TickReport, TickStructuralError, curate_tick
 from neurata.tick import _sync_update_in_place
+from neurata.tick import _journal as _write_journal
 
 
 def _home(tmp_path):
@@ -204,6 +205,59 @@ def test_journal_write_failure_recorded_as_error(tmp_path, monkeypatch):
     assert report.processed == 0
     assert len(report.errors) == 1
     assert "journal" in report.errors[0].reason
+
+
+# ── T1: guard path absoluto/`..` no log de dedup (journal) ─────────
+
+def test_journal_rejects_absolute_src_path(tmp_path):
+    home = _home(tmp_path)
+    report = TickReport(tick="01JTICK0000000000000000000")
+
+    ok = _write_journal(home, report.tick, "catalog", "id1",
+                        "/etc/passwd", "library/a.md", report)
+
+    assert ok is False
+    assert _journal(home) == []
+    assert len(report.errors) == 1
+
+
+def test_journal_rejects_dotdot_component_in_dst_path(tmp_path):
+    home = _home(tmp_path)
+    report = TickReport(tick="01JTICK0000000000000000000")
+
+    ok = _write_journal(home, report.tick, "catalog", "id1",
+                        "inbox/a.md", "../../etc/passwd", report)
+
+    assert ok is False
+    assert _journal(home) == []
+    assert len(report.errors) == 1
+
+
+def test_journal_rejects_mixed_dotdot_path(tmp_path):
+    home = _home(tmp_path)
+    report = TickReport(tick="01JTICK0000000000000000000")
+
+    ok = _write_journal(home, report.tick, "catalog", "id1",
+                        "a/../../b", "library/a.md", report)
+
+    assert ok is False
+    assert _journal(home) == []
+    assert len(report.errors) == 1
+
+
+def test_journal_accepts_legit_relative_path(tmp_path):
+    home = _home(tmp_path)
+    report = TickReport(tick="01JTICK0000000000000000000")
+
+    ok = _write_journal(home, report.tick, "catalog", "id1",
+                        "inbox/a.md", "library/a.md", report)
+
+    assert ok is True
+    assert report.errors == []
+    journal = _journal(home)
+    assert len(journal) == 1
+    assert journal[0]["src"] == "inbox/a.md"
+    assert journal[0]["dst"] == "library/a.md"
 
 
 def test_stale_index_schema_raises_structural_error(tmp_path):

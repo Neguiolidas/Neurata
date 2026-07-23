@@ -16,7 +16,7 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from neurata import indexdb
 from neurata.dedup import NEAR_DUP_JACCARD, jaccard, shingle_hashes
@@ -436,9 +436,28 @@ def _quarantine(home: NeurataHome, tick_id: str, path: Path,
         report.errors.append(ItemError(rel_src, reason))
 
 
+def _is_safe_journal_path(path: "str | None") -> bool:
+    """True se path é relativo e sem componente `..` (previne escrita
+    fora da árvore do repo via journal com path malicioso/corrompido)."""
+    if path is None:
+        return True
+    pure = PurePosixPath(path)
+    if pure.is_absolute():
+        return False
+    if ".." in pure.parts:
+        return False
+    return True
+
+
 def _journal(home: NeurataHome, tick_id: str, verb: str,
             item: "str | None", src: "str | None", dst: "str | None",
             report: TickReport, **extra: object) -> bool:
+    if not _is_safe_journal_path(src) or not _is_safe_journal_path(dst):
+        report.errors.append(ItemError(
+            dst or src or "",
+            f"path suspeito (absoluto ou com '..') rejeitado no journal:"
+            f" src={src!r} dst={dst!r}"))
+        return False
     rec = {"ts": _now(), "tick": tick_id, "verb": verb, "item": item,
           "src": src, "dst": dst}
     rec.update(extra)
