@@ -8,7 +8,7 @@ from neurata.compact import compact
 from neurata.deposit import DepositError, deposit
 from neurata.doctor import exit_code, run_checks
 from neurata.entryref import EntryAmbiguousError, EntryNotFoundError
-from neurata.expand import ExpandError, expand
+from neurata.expand import _GRAINS, ExpandError, expand
 from neurata.harvest import REGISTRY, harvest as run_harvest
 from neurata.home import CONTRACT_VERSION, NeurataHome
 from neurata.config import ConfigError, load as load_config
@@ -115,8 +115,8 @@ def _dispatch(args: argparse.Namespace, home: NeurataHome) -> tuple[dict, int]:
         result = dataclasses.asdict(report)
         return result, (2 if report.errors else 0)
     if args.command == "harvest":
-        report = run_harvest(home, args.target)
-        return dataclasses.asdict(report), 0
+        harvest_report = run_harvest(home, args.target)
+        return dataclasses.asdict(harvest_report), 0
     if args.command == "snapshot":
         return _dispatch_snapshot(args, home)
     raise AssertionError(f"comando desconhecido: {args.command}")
@@ -226,7 +226,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     exp = sub.add_parser("expand", help="grão maior sob demanda")
     exp.add_argument("ref", help="id ou slug")
-    exp.add_argument("--grain", choices=("card", "summary", "full"),
+    exp.add_argument("--grain", choices=_GRAINS,
                      default="full")
     exp.add_argument("--restore", action="store_true",
                      help="restaura o full do archive, remove derived_from")
