@@ -3,6 +3,7 @@ import argparse
 import dataclasses
 import json
 import sys
+import time
 
 from neurata.compact import compact
 from neurata.deposit import DepositError, deposit
@@ -23,6 +24,7 @@ from neurata.snapshot import (
     restore, restore_dry_run, set_remote,
 )
 from neurata.tick import TickStructuralError, curate_tick
+from neurata.usage import log_invocation
 
 
 class UsageError(Exception):
@@ -46,23 +48,35 @@ def main(argv: "list[str] | None" = None) -> int:
     if not getattr(args, "command", None):
         parser.print_help()
         return 2
+    home = None
+    rc = 2
+    started = time.monotonic()
     try:
         home = NeurataHome()
         home.init()
         result, rc = _dispatch(args, home)
+        _emit(args, result, rc)
     except TickStructuralError as exc:
         _emit_error(args, exc)
-        return 1
+        rc = 1
     except (ConfigError, DepositError, EntryAmbiguousError,
             EntryNotFoundError, ExpandError, FTS5MissingError,
             IndexSchemaError, LockHeldError, QueryError, SnapshotError,
             OSError) as exc:
         _emit_error(args, exc)
-        return 2
+        rc = 2
     except Exception as exc:  # nunca vaza traceback pela CLI
         _emit_error(args, exc)
-        return 2
-    _emit(args, result, rc)
+        rc = 2
+    finally:
+        # Loga a invocação assim que houve home (best-effort §gate v0.9):
+        # falha aqui NUNCA altera o exit code nem propaga.
+        if home is not None:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            try:
+                log_invocation(home, args.command, duration_ms, rc == 0)
+            except Exception:
+                pass
     return rc
 
 
