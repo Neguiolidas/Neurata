@@ -8,14 +8,12 @@ encontra o termo depositado. Determinístico — sem sleep, sem retry.
 from neurata.deposit import deposit
 from neurata.home import NeurataHome
 from neurata.query import query
-from neurata.reindex import reindex
 from neurata.tick import curate_tick
 
 
 def _home(tmp_path):
     home = NeurataHome(tmp_path)
     home.init()
-    reindex(home)  # bootstrap: marca index_schema_version, exigido por query()
     return home
 
 

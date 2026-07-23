@@ -82,6 +82,8 @@ def curate_tick(home: NeurataHome, budget: "int | None" = None) -> TickReport:
             shingle_sets = dict(indexdb.load_shingle_sets(con))
             for path in items:
                 _process_item(home, con, tick_id, path, report, shingle_sets)
+
+            indexdb.stamp_if_unversioned(con)
         finally:
             con.close()
 

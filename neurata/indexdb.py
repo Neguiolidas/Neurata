@@ -85,6 +85,29 @@ def connect(home: NeurataHome) -> sqlite3.Connection:
     return con
 
 
+def stamp_if_unversioned(con: sqlite3.Connection) -> None:
+    """Chamado por `tick` ao fim de um run que catalogou algo. Um INSERT
+    em `entries` só pode ter sucesso se as colunas da DDL atual (ex.:
+    `source_key`, v6) já existirem na tabela — schema antigo real faria
+    o INSERT falhar com OperationalError antes de chegar aqui. Logo,
+    entries não-vazia + sem linha de versão é prova suficiente de que o
+    schema já está em INDEX_SCHEMA_VERSION; grava a versão pra destravar
+    `query` sem exigir `reindex` redundante. Índice ainda vazio (nenhum
+    item catalogado) NÃO é marcado — indistinguível de haver arquivos
+    em library/ nunca indexados; só `reindex()` promove esse caso."""
+    has_version = con.execute(
+        "SELECT 1 FROM meta WHERE key='index_schema_version'").fetchone()
+    if has_version:
+        return
+    has_entries = con.execute("SELECT 1 FROM entries LIMIT 1").fetchone()
+    if not has_entries:
+        return
+    con.execute(
+        "INSERT OR REPLACE INTO meta VALUES ('index_schema_version', ?)",
+        (str(INDEX_SCHEMA_VERSION),))
+    con.commit()
+
+
 def fts5_available(con: sqlite3.Connection) -> bool:
     try:
         con.execute("CREATE VIRTUAL TABLE temp.fts5_probe USING fts5(x)")
