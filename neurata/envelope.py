@@ -7,19 +7,31 @@ from pathlib import Path
 
 def capture(origin: str = "manual", agent: "str | None" = None,
             session: "str | None" = None, cwd: "Path | None" = None) -> dict:
-    cwd = Path(cwd) if cwd is not None else Path.cwd()
+    if cwd is not None:
+        resolved_cwd = Path(cwd)
+    else:
+        try:
+            resolved_cwd = Path.cwd()
+        except OSError:
+            # cwd deletado sob o processo (rmdir concorrente) — não deixa a
+            # proveniência best-effort derrubar o depósito.
+            resolved_cwd = Path(".")
+    try:
+        host = socket.gethostname()
+    except OSError:
+        host = "unknown"
     env: dict = {
-        "host": socket.gethostname(),
-        "cwd": str(cwd),
+        "host": host,
+        "cwd": str(resolved_cwd),
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "origin": origin,
     }
-    git = _git_context(cwd)
+    git = _git_context(resolved_cwd)
     if git:
         env["git"] = git
-    if agent:
+    if agent is not None:
         env["agent"] = agent
-    if session:
+    if session is not None:
         env["session"] = session
     return env
 

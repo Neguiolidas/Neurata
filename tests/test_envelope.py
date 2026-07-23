@@ -1,7 +1,8 @@
 """tests/test_envelope.py"""
 import subprocess
+from unittest.mock import patch
 
-from neurata.envelope import capture
+from neurata.envelope import _git_context, capture
 
 
 def test_always_present_fields(tmp_path):
@@ -37,3 +38,35 @@ def test_git_context_inside_repo(tmp_path):
 def test_no_git_outside_repo(tmp_path):
     env = capture(cwd=tmp_path)
     assert "git" not in env
+
+
+def test_empty_agent_session_preserved(tmp_path):
+    """agent="" / session="" explícitos são distintos de "não informado"."""
+    env = capture(agent="", session="", cwd=tmp_path)
+    assert env["agent"] == ""
+    assert env["session"] == ""
+
+
+def test_capture_survives_deleted_cwd(tmp_path, monkeypatch):
+    """Path.cwd() levantando OSError (cwd removido sob o processo) não
+    derruba capture() — cai pra um cwd de fallback."""
+    with patch("neurata.envelope.Path.cwd", side_effect=OSError("gone")):
+        env = capture()
+    assert env["cwd"]
+
+
+def test_capture_survives_gethostname_failure(tmp_path):
+    with patch("neurata.envelope.socket.gethostname",
+               side_effect=OSError("no host")):
+        env = capture(cwd=tmp_path)
+    assert env["host"] == "unknown"
+
+
+def test_git_context_short_output_no_commit_yet(tmp_path):
+    """rev-parse com rc=0 mas só 1 linha (repo sem commit em alguns gits)
+    ainda produz 'root' sem KeyError/IndexError."""
+    fake = subprocess.CompletedProcess(args=[], returncode=0,
+                                        stdout=str(tmp_path) + "\n")
+    with patch("neurata.envelope.subprocess.run", return_value=fake):
+        ctx = _git_context(tmp_path)
+    assert ctx == {"root": str(tmp_path.resolve())}

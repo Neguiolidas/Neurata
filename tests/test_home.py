@@ -1,6 +1,8 @@
 """tests/test_home.py"""
 import json
 
+import pytest
+
 from neurata.home import CONTRACT_VERSION, SCHEMA_VERSION, NeurataHome
 
 
@@ -38,3 +40,30 @@ def test_append_and_read_log(tmp_path):
     (home.logs / "deposits.jsonl").open("a").write("LINHA CORROMPIDA\n")
     records = home.read_log("deposits")
     assert [r["hash"] for r in records] == ["abc", "def"]
+
+
+@pytest.mark.parametrize("bad_name", [
+    "../escape", "/etc/passwd", "a/b", "a\\b", "", "with space", "a.b",
+])
+def test_append_log_rejects_unsafe_name(tmp_path, bad_name):
+    home = NeurataHome(tmp_path)
+    home.init()
+    with pytest.raises(ValueError):
+        home.append_log(bad_name, {"x": 1})
+
+
+@pytest.mark.parametrize("bad_name", [
+    "../escape", "/etc/passwd", "a/b", "a\\b", "", "with space", "a.b",
+])
+def test_read_log_rejects_unsafe_name(tmp_path, bad_name):
+    home = NeurataHome(tmp_path)
+    home.init()
+    with pytest.raises(ValueError):
+        home.read_log(bad_name)
+
+
+def test_env_var_falsy_root_not_silently_overridden(tmp_path, monkeypatch):
+    """root="" explícito não deve cair pro env var (root is not None)."""
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path / "from-env"))
+    home = NeurataHome("")
+    assert home.root != tmp_path / "from-env"
