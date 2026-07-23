@@ -14,6 +14,62 @@ from datetime import datetime, timezone
 from neurata.home import NeurataHome
 
 _LOG_NAME = "usage"
+_INVOCATION_LOG = "usage.log"
+_INVOCATION_FIELDS = ("ts", "cmd", "duration_ms", "ok")
+
+
+def log_invocation(home: NeurataHome, cmd: str, duration_ms: int,
+                   ok: bool) -> bool:
+    """Append de 1 invocação de CLI em NEURATA_HOME/usage.log.
+
+    Distinto de log_event (logs/usage.jsonl, eventos da shelf): aqui é uma
+    linha por chamada da CLI, pra o gate `doctor last-tick` medir uso real.
+    Best-effort, O_APPEND (escrita < PIPE_BUF, atômica na prática). Retorna
+    True/False; NUNCA propaga falha.
+    """
+    record = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "cmd": cmd,
+        "duration_ms": duration_ms,
+        "ok": ok,
+    }
+    line = json.dumps(record, ensure_ascii=False) + "\n"
+    path = home.root / _INVOCATION_LOG
+    try:
+        fd = os.open(str(path), os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o644)
+        try:
+            os.write(fd, line.encode("utf-8"))
+        finally:
+            os.close(fd)
+        return True
+    except OSError:
+        return False
+
+
+def read_invocations(home: NeurataHome) -> dict:
+    """{"entries": [record, ...], "corrupt_lines": int}.
+
+    Ordem preservada. Linha corrompida (JSON inválido ou faltando campos
+    obrigatórios) é pulada e contada — leitura tolerante a torn-line, nunca
+    explode.
+    """
+    path = home.root / _INVOCATION_LOG
+    entries: list[dict] = []
+    corrupt = 0
+    if not path.exists():
+        return {"entries": entries, "corrupt_lines": corrupt}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            rec = json.loads(line)
+            if not all(k in rec for k in _INVOCATION_FIELDS):
+                raise KeyError
+        except (ValueError, KeyError, TypeError):
+            corrupt += 1
+            continue
+        entries.append(rec)
+    return {"entries": entries, "corrupt_lines": corrupt}
 
 
 def log_event(home: NeurataHome, event: str, entry_id: str,
