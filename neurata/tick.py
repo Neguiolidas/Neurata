@@ -199,17 +199,20 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
                  rel_dst, report, content_hash=content_hash)
     if not ok:
         return
+    literate_ok = True
     if literate:
-        _journal(home, tick_id, "literate", str(meta["id"]), rel_src,
-                rel_dst, report)
+        literate_ok = _journal(home, tick_id, "literate", str(meta["id"]),
+                              rel_src, rel_dst, report)
+    conflict_ok = True
     if conflict_new:
-        _journal(home, tick_id, "conflict", str(meta["id"]), rel_src,
-                rel_dst, report, conflicts_with=target_id)
+        conflict_ok = _journal(home, tick_id, "conflict", str(meta["id"]),
+                              rel_src, rel_dst, report,
+                              conflicts_with=target_id)
 
     report.processed += 1
-    if literate:
+    if literate and literate_ok:
         report.literate += 1
-    if conflict_new:
+    if conflict_new and conflict_ok:
         report.conflicts += 1
 
 
@@ -318,8 +321,10 @@ def _sync_update_in_place(home: NeurataHome, con, tick_id: str, *,
         report.errors.append(ItemError(rel_src, f"transiente (I/O): {exc}"))
         return
 
-    _journal(home, tick_id, "update", item_id, rel_src, lib_rel_path,
-             report, content_hash=content_hash)
+    ok = _journal(home, tick_id, "update", item_id, rel_src, lib_rel_path,
+                 report, content_hash=content_hash)
+    if not ok:
+        return
     report.updated += 1
 
 
@@ -373,8 +378,10 @@ def _process_tombstone(home: NeurataHome, con, tick_id: str, path: Path,
         report.errors.append(ItemError(rel_src, f"transiente (I/O): {exc}"))
         return
 
-    _journal(home, tick_id, "stale", str(new_meta.get("id")), rel_src,
-            lib_rel, report)
+    ok = _journal(home, tick_id, "stale", str(new_meta.get("id")), rel_src,
+                 lib_rel, report)
+    if not ok:
+        return
     report.stale += 1
 
 
@@ -429,9 +436,10 @@ def _quarantine(home: NeurataHome, tick_id: str, path: Path,
         n += 1
     path.rename(dest)
     rel_dst = _relpath(home, dest)
-    _journal(home, tick_id, "quarantine", item_id, rel_src, rel_dst,
-            report, reason=reason)
-    report.quarantined += 1
+    ok = _journal(home, tick_id, "quarantine", item_id, rel_src, rel_dst,
+                 report, reason=reason)
+    if ok:
+        report.quarantined += 1
     if mark_error:
         report.errors.append(ItemError(rel_src, reason))
 
@@ -519,9 +527,11 @@ def _reconcile_renames(home: NeurataHome, con, tick_id: str,
             con.execute("UPDATE entries SET path=? WHERE id=?",
                        (new_path, eid))
             con.commit()
-            _journal(home, tick_id, "rename", eid, old_path, new_path,
-                    report)
+            ok = _journal(home, tick_id, "rename", eid, old_path, new_path,
+                         report)
             handled.add(eid)
+            if not ok:
+                continue
             consumed.add(new_path)
             report.renamed += 1
 
@@ -559,8 +569,10 @@ def _reconcile_renames(home: NeurataHome, con, tick_id: str,
             continue  # colisão de slug num órfão: deixa pro reindex full.
         _index_insert(con, meta, body, rel, "library", slug)
         con.commit()
-        _journal(home, tick_id, "catalog", eid, None, rel, report,
-                content_hash=chash)
+        ok = _journal(home, tick_id, "catalog", eid, None, rel, report,
+                     content_hash=chash)
+        if not ok:
+            continue
         report.processed += 1
 
 

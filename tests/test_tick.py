@@ -260,6 +260,195 @@ def test_journal_accepts_legit_relative_path(tmp_path):
     assert journal[0]["dst"] == "library/a.md"
 
 
+# ── T1-fix: call-sites de _journal() devem checar o retorno (Important
+#    #1 da revisão de T1) — se _journal() falhar (guard ou I/O), o
+#    contador de sucesso correspondente do report NÃO pode subir, e
+#    nenhuma entrada falsa/incompleta deve aparecer no journal. ─────
+
+def _fail_append_log_for_verb(monkeypatch, home, target_verb):
+    """Faz home.append_log falhar (OSError) só pro record com o verb
+    indicado — os demais verbs do mesmo tick continuam sendo gravados
+    normalmente. Simula _journal() retornando False num call-site
+    específico sem mexer nos outros (guard e OSError são só as duas
+    causas possíveis de _journal() retornar False; o bug de
+    dessincronia é o mesmo pros callers nos dois casos)."""
+    real_append_log = home.append_log
+
+    def fake(name, record):
+        if name == "journal" and record.get("verb") == target_verb:
+            raise OSError(f"falha simulada de I/O para verb={target_verb!r}")
+        return real_append_log(name, record)
+
+    monkeypatch.setattr(home, "append_log", fake)
+
+
+def test_literate_journal_failure_does_not_increment_literate_counter(
+        tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    original = "---\nsem terminador\nmais linhas que nao fecham o bloco\n"
+    _inbox(home, "quebrado.md", original)
+    _fail_append_log_for_verb(monkeypatch, home, "literate")
+
+    report = curate_tick(home)
+
+    assert report.processed == 1  # catalog (verb diferente) gravou ok
+    assert report.literate == 0
+    assert any("falha ao gravar journal" in e.reason for e in report.errors)
+    journal = _journal(home)
+    assert any(r["verb"] == "catalog" for r in journal)
+    assert not any(r["verb"] == "literate" for r in journal)
+
+
+def test_conflict_journal_failure_does_not_increment_conflict_counter(
+        tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    words = [f"palavra{i}" for i in range(30)]
+    body = " ".join(words) + ".\n"
+    lib_id = "01LIBBASEID0000000000000"
+    _lib_entry(home, "base.md", lib_id, "Base", body)
+    reindex(home)
+    inbox_body = " ".join(words + ["extra1", "extra2"]) + ".\n"
+    _inbox(home, "novo.md",
+          f"---\nid: 01NEWWITHNEARDUP000000\ntitle: Novo\n---\n{inbox_body}")
+    _fail_append_log_for_verb(monkeypatch, home, "conflict")
+
+    report = curate_tick(home)
+
+    assert report.processed == 1
+    assert report.conflicts == 0
+    dest = next(home.library.glob("novo*.md"))
+    meta, _ = parse(dest.read_text())
+    # marca ficou gravada no frontmatter (ação física já ocorrida antes
+    # do journal), mas o journal/contador não pode mentir sobre isso.
+    assert meta["conflicts_with"] == [lib_id]
+    journal = _journal(home)
+    assert not any(r["verb"] == "conflict" for r in journal)
+
+
+def test_update_journal_failure_does_not_increment_updated_counter(
+        tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    old_body = "Corpo antigo do skill antes da atualizacao aqui.\n"
+    entry_id = "01SKILLUPDATEFAIL000000"
+    _lib_skill_entry(home, "foo.md", entry_id, "claude-code:foo",
+                    "Foo Skill", old_body)
+    reindex(home)
+    new_body = "Corpo novo do skill depois da atualizacao mudou aqui.\n"
+    _skill_item(home, "foo-new.md", "01SKILLINBOXFAIL0000000",
+               "claude-code:foo", "Foo Skill Renomeado", new_body)
+    _fail_append_log_for_verb(monkeypatch, home, "update")
+
+    report = curate_tick(home)
+
+    assert report.updated == 0
+    # ação física (write na library + unlink do inbox) já ocorreu antes
+    # do journal: bug seria contador mentir mesmo assim.
+    dest = home.library / "foo.md"
+    _, got_body = parse(dest.read_text())
+    assert got_body == new_body
+    assert list(home.inbox.glob("*.md")) == []
+    journal = _journal(home)
+    assert not any(r["verb"] == "update" for r in journal)
+
+
+def test_stale_journal_guard_rejection_does_not_increment_stale_counter(
+        tmp_path):
+    home = _home(tmp_path)
+    body = "Corpo do skill que ficara obsoleto com path corrompido no indice.\n"
+    entry_id = "01SKILLSTALECORRUPT0000"
+    _lib_skill_entry(home, "foo.md", entry_id, "claude-code:foo",
+                    "Foo Skill", body)
+    reindex(home)
+    # Corrompe o path indexado: sobrevive ao resolve do SO (".." cancela
+    # antes de "library", o arquivo é lido normalmente), mas contém
+    # componente ".." literal — exatamente o dado "malicioso" vindo do
+    # indexdb que o guard de _journal deve rejeitar no dst (cenário
+    # citado na revisão como o de maior risco depois de quarantine).
+    con = connect(home)
+    con.execute("UPDATE entries SET path=? WHERE id=?",
+               ("library/../library/foo.md", entry_id))
+    con.commit()
+    con.close()
+    _tombstone_item(home, "tomb.md", "01TOMBCORRUPT00000000000",
+                    "claude-code:foo")
+
+    report = curate_tick(home)
+
+    assert report.stale == 0
+    meta, _ = parse((home.library / "foo.md").read_text())
+    assert meta.get("stale") == "true"  # ação física já ocorreu
+    assert "stale_since" in meta
+    assert any("path suspeito" in e.reason for e in report.errors)
+    journal = _journal(home)
+    assert not any(r["verb"] == "stale" for r in journal)
+
+
+def test_quarantine_journal_failure_does_not_increment_quarantined_counter(
+        tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    body = "Este e o corpo exato que sera duplicado no inbox mais tarde.\n"
+    _lib_entry(home, "orig.md", "01LIBEXACT0000000000000", "Original", body)
+    reindex(home)
+    _inbox(home, "dup.md",
+          f"---\nid: 01DUP00000000000000000\ntitle: Duplicado\n---\n{body}")
+    _fail_append_log_for_verb(monkeypatch, home, "quarantine")
+
+    report = curate_tick(home)
+
+    assert report.quarantined == 0
+    # ação física (rename pra quarantine/) já ocorreu antes do journal —
+    # exatamente o pior caso apontado na revisão: história com buraco
+    # silencioso enquanto o relatório afirmaria sucesso.
+    assert (home.quarantine / "dup.md").exists()
+    assert not (home.inbox / "dup.md").exists()
+    assert any("falha ao gravar journal" in e.reason for e in report.errors)
+    journal = _journal(home)
+    assert not any(r["verb"] == "quarantine" for r in journal)
+
+
+def test_rename_journal_failure_does_not_increment_renamed_counter(
+        tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    _lib_entry(home, "antigo.md", "01REN0000000000000000", "Antigo",
+              "Corpo estavel que nao muda entre reindex e rename.\n")
+    reindex(home)
+    (home.library / "antigo.md").rename(home.library / "novo-nome.md")
+    _fail_append_log_for_verb(monkeypatch, home, "rename")
+
+    report = curate_tick(home)
+
+    assert report.renamed == 0
+    con = connect(home)
+    row = con.execute(
+        "SELECT path FROM entries WHERE id='01REN0000000000000000'"
+    ).fetchone()
+    # índice já foi atualizado (estado > história) mesmo sem journal:
+    assert row[0] == "library/novo-nome.md"
+    journal = _journal(home)
+    assert not any(r["verb"] == "rename" for r in journal)
+
+
+def test_orphan_catalog_journal_failure_does_not_increment_processed(
+        tmp_path, monkeypatch):
+    home = _home(tmp_path)
+    (home.library / "orfao.md").write_text(
+        "---\nid: 01ORFAOFAIL0000000000\ntitle: Orfao\n---\n"
+        "Arquivo que apareceu em library fora do indice, sem par.\n")
+    _fail_append_log_for_verb(monkeypatch, home, "catalog")
+
+    report = curate_tick(home)
+
+    assert report.processed == 0
+    con = connect(home)
+    row = con.execute(
+        "SELECT path FROM entries WHERE id='01ORFAOFAIL0000000000'"
+    ).fetchone()
+    # o órfão já foi adotado no índice mesmo sem entrada no journal:
+    assert row is not None and row[0] == "library/orfao.md"
+    journal = _journal(home)
+    assert not any(r["verb"] == "catalog" for r in journal)
+
+
 def test_stale_index_schema_raises_structural_error(tmp_path):
     home = _home(tmp_path)
     _inbox(home, "a.md",
