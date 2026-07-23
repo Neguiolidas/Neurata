@@ -757,7 +757,15 @@ def test_skill_item_noop_when_hash_matches_library(tmp_path):
     assert report.updated == 0
     assert list(home.inbox.glob("*.md")) == []
     assert (home.library / "foo.md").read_text() == original
-    assert _journal(home) == []
+    # o skill-item em si é um noop puro (nada de update/catalog pra ele);
+    # a única entrada de journal é a reconciliação T2 do fixture foo.md,
+    # que foi indexado via reindex() direto (sem passar pelo tick antes),
+    # logo aparece como órfão write-then-log na primeira curadoria.
+    journal = _journal(home)
+    assert len(journal) == 1
+    assert journal[0]["verb"] == "catalog"
+    assert journal[0]["item"] == "01SKILLLIB000000000000"
+    assert journal[0].get("reconciled") == "write-then-log"
 
 
 def test_skill_item_update_in_place_preserves_id_slug_path(tmp_path):
@@ -897,3 +905,126 @@ def test_skill_renaissance_after_tombstone_clears_stale(tmp_path):
     journal = _journal(home)
     updates = [r for r in journal if r["verb"] == "update"]
     assert len(updates) == 1
+
+
+# ── T2: reconciliação de órfão write-then-log ───────────────────────
+# Órfão write-then-log: escrita física + commit no índice aconteceram,
+# mas o `_journal()` correspondente falhou/nunca rodou (guard rejeitou
+# path suspeito, ou processo morreu entre write e log). Simulamos
+# gravando direto no filesystem + reindex (que não toca o journal),
+# reproduzindo exatamente "arquivo indexado sem par no journal".
+
+def test_write_then_log_orphan_is_adopted_and_journaled(tmp_path):
+    home = _home(tmp_path)
+    body = "Corpo consistente com o content_hash gravado no frontmatter.\n"
+    entry_id = "01ORPHANWTL0000000000000"
+    _lib_entry(home, "orphan.md", entry_id, "Orphan WTL", body)
+    reindex(home)  # indexa, mas reindex não escreve journal — órfão puro
+
+    before = [r for r in _journal(home) if r["verb"] != "reindex"]
+    assert before == []  # nenhuma entrada de journal ainda
+
+    report = curate_tick(home)
+
+    assert report.reconciled == 1
+    assert report.errors == []
+    assert (home.library / "orphan.md").is_file()  # nunca deleta
+
+    journal = _journal(home)
+    catalog_recs = [r for r in journal if r["verb"] == "catalog"
+                    and r.get("dst") == "library/orphan.md"]
+    assert len(catalog_recs) == 1
+    assert catalog_recs[0]["item"] == entry_id
+    assert catalog_recs[0].get("reconciled") == "write-then-log"
+
+    con = connect(home)
+    try:
+        row = con.execute(
+            "SELECT id, path FROM entries WHERE id=?", (entry_id,)).fetchone()
+    finally:
+        con.close()
+    assert row is not None
+    assert row[1] == "library/orphan.md"
+
+
+def test_write_then_log_orphan_reconciliation_is_idempotent(tmp_path):
+    home = _home(tmp_path)
+    body = "Segundo corpo consistente pra testar idempotencia do tick.\n"
+    entry_id = "01ORPHANIDEMPOT000000000"
+    _lib_entry(home, "orphan2.md", entry_id, "Orphan Idempotent", body)
+    reindex(home)
+
+    first = curate_tick(home)
+    assert first.reconciled == 1
+
+    second = curate_tick(home)
+    assert second.reconciled == 0
+    assert second.quarantined == 0
+    assert second.errors == []
+    assert (home.library / "orphan2.md").is_file()
+
+    journal = _journal(home)
+    catalog_recs = [r for r in journal if r["verb"] == "catalog"
+                    and r.get("dst") == "library/orphan2.md"]
+    assert len(catalog_recs) == 1  # sem duplicar a reconciliação
+
+
+def test_write_then_log_orphan_with_hash_mismatch_is_quarantined(tmp_path):
+    # Frontmatter alega um content_hash que não bate com o corpo real em
+    # disco (corrupção, ou edição direta fora do fluxo) — não é seguro
+    # presumir a origem: quarentena, nunca deleta.
+    home = _home(tmp_path)
+    entry_id = "01ORPHANMISMATCH00000000"
+    original_body = "Corpo original que gerou o content_hash indexado.\n"
+    content_hash = hashlib.sha256(
+        original_body.encode("utf-8")).hexdigest()
+    tampered_body = "Corpo divergente, editado direto no disco por fora.\n"
+    text = (f"---\nid: {entry_id}\ntitle: Orphan Mismatch\n"
+           f"content_hash: {content_hash}\n---\n{tampered_body}")
+    (home.library / "mismatch.md").write_text(text, encoding="utf-8")
+    reindex(home)  # indexa com o content_hash (incorreto) do frontmatter
+
+    report = curate_tick(home)
+
+    assert report.reconciled == 0
+    assert report.quarantined == 1
+    assert len(report.errors) == 1
+    assert not (home.library / "mismatch.md").exists()
+
+    quarantined_files = list(home.quarantine.iterdir())
+    assert len(quarantined_files) == 1
+    assert quarantined_files[0].read_text(encoding="utf-8") == text
+
+    journal = _journal(home)
+    q_recs = [r for r in journal if r["verb"] == "quarantine"
+             and r.get("item") == entry_id]
+    assert len(q_recs) == 1
+    assert "write-then-log" in q_recs[0]["reason"]
+
+    con = connect(home)
+    try:
+        row = con.execute(
+            "SELECT 1 FROM entries WHERE id=?", (entry_id,)).fetchone()
+    finally:
+        con.close()
+    assert row is None  # entrada inconsistente removida do índice
+
+
+def test_write_then_log_orphan_reconciliation_runs_before_new_catalog(
+        tmp_path):
+    # Um tick que tem tanto um órfão write-then-log quanto itens novos no
+    # inbox reconcilia o órfão e cataloga o novo sem interferência mútua.
+    home = _home(tmp_path)
+    body = "Corpo do orfao coexistindo com item novo no mesmo tick.\n"
+    entry_id = "01ORPHANCOEXIST00000000"
+    _lib_entry(home, "orphan3.md", entry_id, "Orphan Coexist", body)
+    reindex(home)
+    _inbox(home, "novo.md",
+          "# Nota Nova\n\nCorpo qualquer com texto suficiente aqui.\n")
+
+    report = curate_tick(home)
+
+    assert report.reconciled == 1
+    assert report.processed == 1  # só o item novo do inbox
+    assert (home.library / "orphan3.md").is_file()
+    assert list(home.inbox.glob("*.md")) == []

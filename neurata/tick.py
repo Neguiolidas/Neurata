@@ -48,6 +48,7 @@ class TickReport:
     renamed: int = 0     # reparos do §3
     updated: int = 0     # skill-item source-keyed: update in-place (§5)
     stale: int = 0       # tombstone marcou entry como stale (§5)
+    reconciled: int = 0  # órfãos write-then-log adotados via re-log (T2)
     errors: "list[ItemError]" = field(default_factory=list)
     duration_ms: int = 0
     snapshot: "str | None" = None  # sha do commit deste tick, ou None (v0.6)
@@ -72,6 +73,7 @@ def curate_tick(home: NeurataHome, budget: "int | None" = None) -> TickReport:
                     "rename() atômico exige mesmo dispositivo")
 
             _reconcile_renames(home, con, tick_id, report)
+            _reconcile_journal_orphans(home, con, tick_id, report)
 
             items = sorted(home.inbox.glob("*.md"))
             if budget:
@@ -574,6 +576,79 @@ def _reconcile_renames(home: NeurataHome, con, tick_id: str,
         if not ok:
             continue
         report.processed += 1
+
+
+# ── §T2: órfão write-then-log (escrita+índice sem journal) ──────────
+
+_CATALOG_VERBS = {"catalog", "rename", "update", "literate"}
+
+
+def _logged_catalog_dsts(home: NeurataHome) -> set:
+    """Paths de library já confirmados no journal por algum verb que
+    explica sua presença ali (catalog/rename/update/literate)."""
+    return {rec["dst"] for rec in home.read_log("journal")
+           if rec.get("verb") in _CATALOG_VERBS and rec.get("dst")}
+
+
+def _reconcile_journal_orphans(home: NeurataHome, con, tick_id: str,
+                              report: TickReport) -> None:
+    """Órfão write-then-log (T2): a escrita física (rename/write) e o
+    commit no índice aconteceram, mas o `_journal()` correspondente
+    falhou (guard rejeitou path suspeito) ou o processo morreu entre o
+    commit do índice e o `append_log` — resultado: arquivo presente na
+    library, já indexado, sem NENHUM registro no journal de como
+    chegou ali (nem catalog, nem rename, nem update, nem literate).
+
+    Detecta cruzando `entries` (location='library') com os `dst` já
+    vistos no journal. Pra cada entrada sem par: se o conteúdo em
+    disco ainda bate com id + content_hash do índice, é seguro assumir
+    que foi só o log que faltou — adota, re-logando agora a entrada
+    (`catalog` marcado `reconciled`). Se não bate (frontmatter
+    corrompido, id trocado, conteúdo alterado por fora do fluxo), não
+    é seguro presumir a origem — move pra quarantine; NUNCA deleta o
+    arquivo. Idempotente: uma vez re-logado (ou quarentenado), o
+    próximo tick já encontra o `dst` no journal (ou o arquivo não está
+    mais em library/) e não repete a ação."""
+    rows = con.execute(
+        "SELECT rowid, id, path, content_hash FROM entries"
+        " WHERE location='library'").fetchall()
+    if not rows:
+        return
+    logged = _logged_catalog_dsts(home)
+    for rowid, eid, path, chash in rows:
+        if path in logged:
+            continue
+        full = home.root / path
+        if not full.is_file():
+            continue  # sem arquivo: já é caso do preflight de renames/mortas
+
+        try:
+            text = full.read_text(encoding="utf-8")
+            meta, body = parse(text)
+            actual_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            meta, actual_hash = {}, None
+
+        id_matches = str(meta.get("id", "")) == str(eid)
+        # sem content_hash indexado (campo ausente no frontmatter na
+        # época da adoção): nao há o que conferir além do id — mesmo
+        # padrão já usado pela adoção de órfãos do §3.
+        hash_ok = (not chash) or actual_hash == chash
+        if id_matches and hash_ok:
+            ok = _journal(home, tick_id, "catalog", eid, None, path, report,
+                         content_hash=chash, reconciled="write-then-log")
+            if ok:
+                report.reconciled += 1
+        else:
+            con.execute("DELETE FROM entries_fts WHERE rowid=?", (rowid,))
+            con.execute("DELETE FROM entry_tags WHERE entry_rowid=?", (rowid,))
+            con.execute("DELETE FROM entries WHERE id=?", (eid,))
+            con.commit()
+            reason = ("orfao write-then-log inconsistente (id/content_hash"
+                      " nao batem com o indice) — quarentena por seguranca,"
+                      " arquivo preservado")
+            _quarantine(home, tick_id, full, report, reason=reason,
+                       mark_error=True, item_id=eid)
 
 
 # ── índice incremental (subset de reindex._insert, sem grains/links) ─
