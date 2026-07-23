@@ -656,6 +656,14 @@ def _reconcile_journal_orphans(home: NeurataHome, con, tick_id: str,
 
 def _index_insert(con, meta: dict, body: str, rel: str, location: str,
                   slug: str) -> int:
+    # reindex() indexa arquivos tanto em library/ quanto em inbox/, sob o
+    # mesmo espaço de ids. Um item pendente no inbox pode já ter uma row
+    # (location='inbox') criada por um reindex() anterior; ao catalogá-lo
+    # agora criaríamos um id duplicado (UNIQUE constraint) e um crash não
+    # tratado no meio do tick, abortando o processamento de todos os itens
+    # restantes. Idempotente: remove a row antiga (se houver) antes de
+    # inserir a versão autoritativa.
+    _index_delete(con, str(meta["id"]))
     title = str(meta.get("title", slug))
     tags = meta.get("tags", [])
     tag_list = [str(t) for t in tags] if isinstance(tags, list) else [str(tags)]
