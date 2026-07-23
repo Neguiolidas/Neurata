@@ -43,6 +43,28 @@ def test_fts_normalized_search(tmp_path):
     assert len(hits) == 1
 
 
+def test_fts_acronym_split_search(tmp_path):
+    """T4: acrônimo/camelCase (ex. JSONParserUtil) recebe dupla indexação
+    no reindex — token completo (`body`/raw) + partes quebradas
+    (`body_norm`), igual ao padrão PT já existente (accent-fold).
+    Buscar só uma parte via `body_norm` precisa achar a linha."""
+    home = _home(tmp_path)
+    (home.library / "nota.md").write_text(
+        "---\nid: 01N\ntitle: Componente\n---\nUsa JSONParserUtil aqui.\n")
+    reindex(home)
+    con = connect(home)
+    for term in ("json", "parser", "util"):
+        hits = con.execute(
+            "SELECT rowid FROM entries_fts WHERE entries_fts"
+            " MATCH ?", (f"body_norm:{term}",)).fetchall()
+        assert len(hits) == 1, f"termo {term!r} não encontrado via body_norm"
+    # raw preserva o token completo intacto (sem split) na coluna crua.
+    hits_raw = con.execute(
+        "SELECT rowid FROM entries_fts WHERE entries_fts"
+        " MATCH ?", ('body:JSONParserUtil',)).fetchall()
+    assert len(hits_raw) == 1
+
+
 def test_skips_invalid_and_reports(tmp_path):
     home = _home(tmp_path)
     (home.library / "sem-id.md").write_text("---\ntitle: X\n---\ncorpo\n")

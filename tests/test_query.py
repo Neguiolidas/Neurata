@@ -108,6 +108,28 @@ def test_schema_mismatch_remediation(tmp_path):
         query(home, "x")
 
 
+def test_acronym_split_findable_by_parts(tmp_path):
+    """T4: termo com acrônimo/camelCase (ex. JSONParserUtil) é indexado
+    com dupla tokenização (token completo + partes split), igual ao
+    padrão PT já existente — busca por uma parte isolada (`JSON`,
+    `Parser`) precisa achar a entrada mesmo sem o termo completo."""
+    home = _home(tmp_path)
+    _write(home, "parser-util",
+           ["id: 01E", "title: JSONParserUtil", "type: note"],
+           "Utilitário interno, sem relação com os outros termos.\n")
+    reindex(home)
+    res_json = query(home, "JSON")["results"]
+    assert any(c["slug"] == "parser-util" for c in res_json)
+    res_parser = query(home, "Parser")["results"]
+    assert any(c["slug"] == "parser-util" for c in res_parser)
+    res_util = query(home, "Util")["results"]
+    assert any(c["slug"] == "parser-util" for c in res_util)
+    # o termo completo original (sem split) também precisa achar — a
+    # coluna raw preserva "JSONParserUtil" intacto.
+    res_full = query(home, "JSONParserUtil")["results"]
+    assert any(c["slug"] == "parser-util" for c in res_full)
+
+
 def test_malicious_queries_never_leak_fts_errors(tmp_path):
     home = _setup(tmp_path)
     malignas = ['a AND b', 'x "quebra', 'a(b)c', 'NEAR(a b)', 'col:val',
