@@ -639,6 +639,7 @@ def _reconcile_journal_orphans(home: NeurataHome, con, tick_id: str,
                          content_hash=chash, reconciled="write-then-log")
             if ok:
                 report.reconciled += 1
+                report.processed += 1
         else:
             con.execute("DELETE FROM entries_fts WHERE rowid=?", (rowid,))
             con.execute("DELETE FROM entry_tags WHERE entry_rowid=?", (rowid,))

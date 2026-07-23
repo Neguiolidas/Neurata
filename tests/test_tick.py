@@ -12,6 +12,7 @@ from neurata.frontmatter import parse
 from neurata.home import NeurataHome
 from neurata.indexdb import connect
 from neurata.reindex import reindex
+from neurata.snapshot import list_snapshots
 from neurata.tick import TickReport, TickStructuralError, curate_tick
 from neurata.tick import _sync_update_in_place
 from neurata.tick import _journal as _write_journal
@@ -314,7 +315,10 @@ def test_conflict_journal_failure_does_not_increment_conflict_counter(
 
     report = curate_tick(home)
 
-    assert report.processed == 1
+    # processed == 2: base.md (fixture indexado via reindex direto, sem
+    # journal) é reconciliado como órfão write-then-log (T2) + novo.md
+    # cataloged normalmente — ambos contam em processed (T2 fix).
+    assert report.processed == 2
     assert report.conflicts == 0
     dest = next(home.library.glob("novo*.md"))
     meta, _ = parse(dest.read_text())
@@ -503,7 +507,10 @@ def test_exact_duplicate_content_hash_quarantined(tmp_path):
     report = curate_tick(home)
 
     assert report.quarantined == 1
-    assert report.processed == 0
+    # processed == 1: o duplicado em si é quarentenado (não processa),
+    # mas orig.md (fixture indexado via reindex direto, sem journal) é
+    # reconciliado como órfão write-then-log (T2) e conta em processed.
+    assert report.processed == 1
     assert (home.quarantine / "dup.md").exists()
 
 
@@ -520,7 +527,10 @@ def test_near_dup_above_threshold_marks_conflict(tmp_path):
 
     report = curate_tick(home)
 
-    assert report.processed == 1
+    # processed == 2: base.md (fixture indexado via reindex direto, sem
+    # journal) é reconciliado como órfão write-then-log (T2) + novo.md
+    # cataloged normalmente.
+    assert report.processed == 2
     assert report.conflicts == 1
     dest = next(home.library.glob("novo*.md"))
     meta, _ = parse(dest.read_text())
@@ -540,7 +550,10 @@ def test_near_dup_below_threshold_no_mark(tmp_path):
 
     report = curate_tick(home)
 
-    assert report.processed == 1
+    # processed == 2: base.md (fixture indexado via reindex direto, sem
+    # journal) é reconciliado como órfão write-then-log (T2) + novo.md
+    # cataloged normalmente.
+    assert report.processed == 2
     assert report.conflicts == 0
     dest = next(home.library.glob("novo*.md"))
     meta, _ = parse(dest.read_text())
@@ -580,7 +593,10 @@ def test_existing_conflicts_with_not_rejournaled(tmp_path):
 
     report = curate_tick(home)
 
-    assert report.processed == 1
+    # processed == 2: base.md (fixture indexado via reindex direto, sem
+    # journal) é reconciliado como órfão write-then-log (T2) + novo.md
+    # cataloged normalmente.
+    assert report.processed == 2
     assert report.conflicts == 0
     journal = _journal(home)
     assert not any(r["verb"] == "conflict" for r in journal)
@@ -728,7 +744,10 @@ def test_skill_item_new_cataloged_with_source_key_no_near_dup(tmp_path):
 
     report = curate_tick(home)
 
-    assert report.processed == 1
+    # processed == 2: base.md (fixture indexado via reindex direto, sem
+    # journal) é reconciliado como órfão write-then-log (T2) + skill.md
+    # cataloged normalmente.
+    assert report.processed == 2
     assert report.conflicts == 0
     con = connect(home)
     row = con.execute(
@@ -753,14 +772,15 @@ def test_skill_item_noop_when_hash_matches_library(tmp_path):
 
     report = curate_tick(home)
 
-    assert report.processed == 0
+    # processed == 1: o skill-item em si é um noop puro (nada de
+    # update/catalog pra ele); mas foo.md (fixture indexado via
+    # reindex() direto, sem passar pelo tick antes) é reconciliado como
+    # órfão write-then-log (T2) na primeira curadoria, e isso conta em
+    # processed (mesmo padrão dos demais pontos de catalogação).
+    assert report.processed == 1
     assert report.updated == 0
     assert list(home.inbox.glob("*.md")) == []
     assert (home.library / "foo.md").read_text() == original
-    # o skill-item em si é um noop puro (nada de update/catalog pra ele);
-    # a única entrada de journal é a reconciliação T2 do fixture foo.md,
-    # que foi indexado via reindex() direto (sem passar pelo tick antes),
-    # logo aparece como órfão write-then-log na primeira curadoria.
     journal = _journal(home)
     assert len(journal) == 1
     assert journal[0]["verb"] == "catalog"
@@ -927,6 +947,10 @@ def test_write_then_log_orphan_is_adopted_and_journaled(tmp_path):
     report = curate_tick(home)
 
     assert report.reconciled == 1
+    # A adoção do órfão write-then-log É uma catalogação: precisa contar
+    # em `processed` (mesmo padrão dos outros pontos de catalogação do
+    # arquivo), senão o snapshot commit não menciona a operação (spec §3).
+    assert report.processed == 1
     assert report.errors == []
     assert (home.library / "orphan.md").is_file()  # nunca deleta
 
@@ -945,6 +969,15 @@ def test_write_then_log_orphan_is_adopted_and_journaled(tmp_path):
         con.close()
     assert row is not None
     assert row[1] == "library/orphan.md"
+
+    # report.processed > 0 -> commit_tick não deve cair no subject
+    # fallback genérico ("snapshot: metadados atualizados"); a
+    # catalogação da adoção precisa aparecer no snapshot commit.
+    assert report.snapshot is not None
+    snapshots = list_snapshots(home, limit=1)
+    assert snapshots
+    assert snapshots[0]["subject"] != "snapshot: metadados atualizados"
+    assert "catalogados" in snapshots[0]["subject"]
 
 
 def test_write_then_log_orphan_reconciliation_is_idempotent(tmp_path):
@@ -1025,6 +1058,8 @@ def test_write_then_log_orphan_reconciliation_runs_before_new_catalog(
     report = curate_tick(home)
 
     assert report.reconciled == 1
-    assert report.processed == 1  # só o item novo do inbox
+    # processed == 2: órfão reconciliado (T2) + item novo do inbox —
+    # ambos são catalogação e contam em processed (T2 fix).
+    assert report.processed == 2
     assert (home.library / "orphan3.md").is_file()
     assert list(home.inbox.glob("*.md")) == []
