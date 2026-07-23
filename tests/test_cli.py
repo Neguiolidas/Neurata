@@ -159,6 +159,43 @@ def test_bad_args_emit_json_envelope(tmp_path, monkeypatch, capsys):
     assert out["error"]["code"] == "UsageError"
 
 
+def test_top_level_invalid_command_emits_json_envelope(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    rc = main(["bogus-command", "--json"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["command"] is None
+    assert out["error"]["code"] == "UsageError"
+    assert "invalid choice" in out["error"]["message"]
+
+
+def test_unrecognized_flag_emits_json_envelope(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    rc = main(["--nao-existe", "--json"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is False
+    assert out["error"]["code"] == "UsageError"
+    assert "unrecognized arguments" in out["error"]["message"]
+
+
+def test_bad_args_without_json_flag_dont_leak_argparse_usage_stdout(
+        tmp_path, monkeypatch, capsys):
+    """Sem --json, o erro vai formatado pro stderr — não é o usage cru
+    do argparse (que hoje sairia direto, fora do envelope, via stderr
+    também, mas sem passar pelo mesmo formatador de erro do resto da
+    CLI)."""
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    rc = main(["bogus-command"])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "UsageError" in captured.err
+    assert "invalid choice" in captured.err
+
+
 _LONG_BODY = (
     "## Seção 1\n\n"
     "Primeiro parágrafo da seção um com bastante texto pra simular "
