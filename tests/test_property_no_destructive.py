@@ -13,7 +13,6 @@ home) — nada de rede/FS real fora do diretório temporário do teste.
 """
 import hashlib
 import random
-from pathlib import Path
 
 from neurata.deposit import deposit
 from neurata.expand import expand
