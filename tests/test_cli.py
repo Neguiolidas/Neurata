@@ -33,6 +33,7 @@ def test_reindex_and_doctor_flow(tmp_path, monkeypatch, capsys):
     assert rc == 0
     assert json.loads(capsys.readouterr().out)["result"]["indexed"] == 1
     main(["snapshot"])  # commit limpo -> snapshot check "ok" (senão warn/rc1)
+    main(["tick"])  # last-tick check exige tick recente -> rc0
     capsys.readouterr()
     rc = main(["doctor", "--json"])
     out = json.loads(capsys.readouterr().out)
@@ -91,6 +92,7 @@ def test_doctor_json_envelope_ok_reflects_rc(tmp_path, monkeypatch, capsys):
     main(["deposit", "algo"])
     main(["reindex"])
     main(["snapshot"])  # commit limpo -> snapshot check "ok" (senão warn/rc1)
+    main(["tick"])  # last-tick check exige tick recente -> rc0
     capsys.readouterr()
 
     # Doctor tudo ok -> envelope ok:true.

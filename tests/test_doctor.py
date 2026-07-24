@@ -9,6 +9,7 @@ from neurata import archive, snapshot
 from neurata.doctor import exit_code, run_checks
 from neurata.home import NeurataHome
 from neurata.reindex import reindex
+from neurata.usage import log_invocation
 
 
 def _home(tmp_path):
@@ -25,6 +26,7 @@ def test_healthy_home_all_ok(tmp_path):
     home = _home(tmp_path)
     reindex(home)
     snapshot.commit_manual(home)  # repo + commit limpo -> snapshot check ok
+    log_invocation(home, "tick", 5, True)  # tick recente -> last-tick ok
     checks = _by_name(run_checks(home))
     for name in ("python-version", "home-layout", "config", "fts5", "index"):
         assert checks[name].status == "ok", name
@@ -76,7 +78,7 @@ def test_corrupt_index_fails_cleanly(tmp_path):
     home = _home(tmp_path)
     home.index_path.write_bytes(b"\x00lixo que nao e sqlite\xff\xfe")
     checks = run_checks(home)  # nao pode explodir
-    assert len(checks) == 13  # todos os checks presentes (inclui snapshot)
+    assert len(checks) == 14  # todos os checks presentes (inclui last-tick)
     by = _by_name(checks)
     assert by["index"].status == "fail"
     assert by["index"].remedy

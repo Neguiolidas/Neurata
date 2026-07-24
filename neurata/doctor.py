@@ -3,7 +3,7 @@ import json
 import sqlite3
 import sys
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from neurata import archive, config as query_config, snapshot, usage
 from neurata.frontmatter import FrontmatterError, parse as parse_frontmatter
@@ -38,6 +38,7 @@ def run_checks(home: NeurataHome) -> list[Check]:
     checks.append(_lock(home))
     checks.append(_archive(home))
     checks.append(_usage(home))
+    checks.append(_last_tick(home))
     checks.append(_snapshot(home))
     return checks
 
@@ -218,6 +219,29 @@ def _usage(home: NeurataHome) -> Check:
                      "obrigatória, mas investigue se o volume crescer")
     return Check("usage", "ok", f"{len(data['entries'])} entrada(s) "
                  "com uso registrado")
+
+
+_TICK_MAX_AGE = timedelta(hours=2)  # 2× o intervalo de cron (0 * * * *)
+
+
+def _last_tick(home: NeurataHome) -> Check:
+    data = usage.read_invocations(home)
+    ticks = [e["ts"] for e in data["entries"] if e.get("cmd") == "tick"]
+    if not ticks:
+        return Check("last-tick", "warn", "nenhum tick registrado ainda",
+                     "configure o cron do tick: `0 * * * * neurata tick`")
+    last = max(ticks)
+    try:
+        age = datetime.now(timezone.utc) - datetime.fromisoformat(last)
+    except ValueError:
+        return Check("last-tick", "warn", f"ts de tick ilegível: {last}",
+                     "usage.log pode estar corrompido — investigue")
+    if age > _TICK_MAX_AGE:
+        hours = int(age.total_seconds() // 3600)
+        return Check("last-tick", "warn",
+                     f"último tick há ~{hours}h ({last})",
+                     "cron do tick parado? confira o crontab")
+    return Check("last-tick", "ok", f"último tick={last}")
 
 
 def _lock(home: NeurataHome) -> Check:
