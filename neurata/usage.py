@@ -58,7 +58,11 @@ def read_invocations(home: NeurataHome) -> dict:
     corrupt = 0
     if not path.exists():
         return {"entries": entries, "corrupt_lines": corrupt}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    # errors="replace": um write torn/parcial pode deixar uma sequência
+    # UTF-8 multibyte cortada; sem replace, read_text explodiria fora do
+    # try per-linha e quebraria a promessa "nunca explode". Byte inválido
+    # vira U+FFFD → linha vira JSON inválido → contada como corrupt.
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
             continue
         try:
@@ -108,7 +112,8 @@ def read_usage(home: NeurataHome) -> dict:
     corrupt = 0
     if not path.exists():
         return {"entries": agg, "corrupt_lines": corrupt}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    # errors="replace": ver read_invocations — torn-line vira corrupt, não crash.
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
         if not line.strip():
             continue
         try:

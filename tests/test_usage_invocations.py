@@ -59,6 +59,22 @@ def test_read_invocations_tolerates_corrupt(tmp_path):
     assert [e["cmd"] for e in data["entries"]] == ["query", "tick"]
 
 
+def test_read_invocations_tolerates_invalid_utf8(tmp_path):
+    # Regressão: um write torn/parcial pode deixar uma sequência UTF-8
+    # multibyte cortada no fim do arquivo. read_invocations promete
+    # "nunca explode" — o byte inválido tem que virar corrupt, não crash.
+    home = _home(tmp_path)
+    path = home.root / "usage.log"
+    with open(path, "wb") as f:
+        f.write(b'{"ts":"2026-07-23T10:00:00+00:00","cmd":"query",'
+                b'"duration_ms":5,"ok":true}\n')
+        f.write(b'\xe2\x9c')  # 3-byte char (✓) cortado ao meio — torn line
+    data = read_invocations(home)  # não pode levantar UnicodeDecodeError
+    assert len(data["entries"]) == 1
+    assert data["entries"][0]["cmd"] == "query"
+    assert data["corrupt_lines"] == 1
+
+
 def test_log_invocation_best_effort_never_raises(tmp_path):
     # root aponta pra caminho onde o arquivo não pode ser criado: um
     # arquivo comum no lugar do diretório root faz o open falhar.

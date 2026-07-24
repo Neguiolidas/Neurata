@@ -22,6 +22,21 @@ def test_log_event_e_read(tmp_path):
     assert agg["entries"]["e1"]["last_used"] is not None
 
 
+def test_read_usage_tolera_utf8_invalido(tmp_path):
+    # Regressão: write torn/parcial deixa sequência UTF-8 cortada no fim do
+    # arquivo. read_usage promete pular linha corrompida, não explodir.
+    home = NeurataHome(tmp_path)
+    home.init()
+    log_event(home, "query", "e1", query="foo", rank=0)
+    path = home.logs / "usage.jsonl"
+    with path.open("ab") as fh:
+        fh.write(b'\xe2\x9c')  # 3-byte char (✓) cortado ao meio
+
+    agg = read_usage(home)  # não pode levantar UnicodeDecodeError
+    assert agg["corrupt_lines"] == 1
+    assert agg["entries"]["e1"]["impressions"] == 1
+
+
 def test_read_usage_sem_arquivo(tmp_path):
     home = NeurataHome(tmp_path)
     home.init()
