@@ -29,9 +29,9 @@ ln -sf ~/.venvs/neurata/bin/neu     ~/.local/bin/neu
 ## Use
 
 ```bash
-# deposit (stdin or flags)
-echo "raw content" | neu deposit
-neu deposit --title "Note" --body "..."
+# deposit (stdin via '-', or positional text)
+echo "raw content" | neu deposit -
+neu deposit "raw content" --title "Note"
 
 # catalogue the inbox (mechanical, reversible — nothing is destroyed)
 neu tick
