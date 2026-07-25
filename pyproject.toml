@@ -11,6 +11,17 @@ license = { text = "AGPL-3.0-or-later" }
 authors = [{ name = "Neguiolidas / Neguitech" }]
 dynamic = ["version"]
 dependencies = []
+keywords = ["knowledge-base", "notes", "cli", "agent", "memory", "obsidian"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
 
 [project.optional-dependencies]
 # Linters presos ao minor. Sem teto, um release do linter reprova código
@@ -27,6 +38,11 @@ dev = [
 [project.scripts]
 neurata = "neurata.cli:main"
 neu = "neurata.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Neguiolidas/Neurata"
+Repository = "https://github.com/Neguiolidas/Neurata"
+Issues = "https://github.com/Neguiolidas/Neurata/issues"
 
 [tool.setuptools]
 packages = ["neurata"]
