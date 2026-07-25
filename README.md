@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/neurata-banner.svg" alt="Neurata — the living memory of your environment: deposit raw, curate quietly, retrieve at the right moment" width="820">
+  <img src="docs/assets/neurata-banner.jpg" alt="Neurata — the living memory of your environment: deposit raw, curate quietly, retrieve at the right moment" width="820">
 </p>
 
 <p align="center">
