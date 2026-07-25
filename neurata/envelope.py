@@ -41,7 +41,7 @@ def _git_context(cwd: Path) -> dict:
         proc = subprocess.run(
             ["git", "-C", str(cwd), "rev-parse",
              "--show-toplevel", "HEAD", "--abbrev-ref", "HEAD"],
-            capture_output=True, text=True, timeout=2)
+            capture_output=True, text=True, timeout=2, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return {}
     if proc.returncode != 0:

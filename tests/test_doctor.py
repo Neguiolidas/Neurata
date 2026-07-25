@@ -6,9 +6,11 @@ import time
 from datetime import datetime
 
 from neurata import archive, snapshot
-from neurata.doctor import exit_code, run_checks
+from neurata.deposit import deposit
+from neurata.doctor import _meta, exit_code, run_checks
 from neurata.home import NeurataHome
 from neurata.reindex import reindex
+from neurata.tick import curate_tick
 from neurata.usage import log_invocation
 
 
@@ -99,6 +101,38 @@ def test_freshness_same_second_not_stale(tmp_path):
     os.utime(path, (last_ts + 0.9, last_ts + 0.9))
     checks = _by_name(run_checks(home))
     assert checks["index-freshness"].status == "ok"
+
+
+def test_freshness_ok_after_tick_rewrites_indexed_file(tmp_path):
+    """O tick move inbox->library reescrevendo o arquivo e atualizando o
+    índice, mas quem carimba `last_reindex` é só o `reindex`. Comparar por
+    mtime dava warn (e rc=1) sempre que o tick cruzava a virada do segundo
+    — flaky de 1-em-60. O corpo indexado é o mesmo: tem que ser ok."""
+    home = _home(tmp_path)
+    deposit(home, content="Titulo\n\ncorpo qualquer da nota\n")
+    reindex(home)
+    time.sleep(1.1)  # garante que o tick escreve num segundo POSTERIOR
+    curate_tick(home)
+    lib = list(home.library.glob("*.md"))
+    assert lib, "tick precisa ter catalogado o item"
+    assert int(lib[0].stat().st_mtime) > int(datetime.fromisoformat(
+        _meta(home, "last_reindex")).timestamp())
+    checks = _by_name(run_checks(home))
+    assert checks["index-freshness"].status == "ok"
+
+
+def test_freshness_warns_when_indexed_file_edited_out_of_band(tmp_path):
+    """A razão de existir do check: alguém editou o arquivo por fora e o
+    índice ficou com o corpo velho. Hash diferente -> warn."""
+    home = _home(tmp_path)
+    path = home.library / "editada.md"
+    path.write_text("---\nid: 01W\ntitle: T\n---\ncorpo original\n")
+    reindex(home)
+    time.sleep(1.1)
+    path.write_text("---\nid: 01W\ntitle: T\n---\ncorpo TROCADO por fora\n")
+    checks = _by_name(run_checks(home))
+    assert checks["index-freshness"].status == "warn"
+    assert "reindex" in checks["index-freshness"].remedy
 
 
 def test_archive_ok_when_nothing_compacted(tmp_path):

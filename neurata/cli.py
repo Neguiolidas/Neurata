@@ -1,18 +1,21 @@
 """neurata/cli.py — fachada CLI. Contrato JSON versionado."""
 import argparse
+import contextlib
 import dataclasses
 import json
 import sys
 import time
 
 from neurata.compact import compact
+from neurata.config import ConfigError
+from neurata.config import load as load_config
 from neurata.deposit import DepositError, deposit
 from neurata.doctor import exit_code, run_checks
 from neurata.entryref import EntryAmbiguousError, EntryNotFoundError
 from neurata.expand import _GRAINS, ExpandError, expand
-from neurata.harvest import REGISTRY, harvest as run_harvest
+from neurata.harvest import REGISTRY
+from neurata.harvest import harvest as run_harvest
 from neurata.home import CONTRACT_VERSION, NeurataHome
-from neurata.config import ConfigError, load as load_config
 from neurata.indexdb import FTS5MissingError, IndexSchemaError, LockHeldError
 from neurata.query import QueryError, query
 from neurata.reindex import reindex
@@ -20,8 +23,14 @@ from neurata.shelf import conflicts as shelf_conflicts
 from neurata.shelf import insights as shelf_insights
 from neurata.shelf import inventory as shelf_inventory
 from neurata.snapshot import (
-    SnapshotError, commit_manual, ensure_repo, list_snapshots, push,
-    restore, restore_dry_run, set_remote,
+    SnapshotError,
+    commit_manual,
+    ensure_repo,
+    list_snapshots,
+    push,
+    restore,
+    restore_dry_run,
+    set_remote,
 )
 from neurata.tick import TickStructuralError, curate_tick
 from neurata.usage import log_invocation
@@ -65,7 +74,10 @@ def main(argv: "list[str] | None" = None) -> int:
             OSError) as exc:
         _emit_error(args, exc)
         rc = 2
-    except Exception as exc:  # nunca vaza traceback pela CLI
+    # Barreira final: a CLI nunca vaza traceback. Qualquer exceção não
+    # prevista vira erro JSON com rc=2 — por isso o catch é largo de
+    # propósito, e não um descuido.
+    except Exception as exc:  # noqa: BLE001
         _emit_error(args, exc)
         rc = 2
     finally:
@@ -73,10 +85,8 @@ def main(argv: "list[str] | None" = None) -> int:
         # falha aqui NUNCA altera o exit code nem propaga.
         if home is not None:
             duration_ms = int((time.monotonic() - started) * 1000)
-            try:
+            with contextlib.suppress(Exception):
                 log_invocation(home, args.command, duration_ms, rc == 0)
-            except Exception:
-                pass
     return rc
 
 
@@ -123,7 +133,9 @@ def _dispatch(args: argparse.Namespace, home: NeurataHome) -> tuple[dict, int]:
                     home.append_log("snapshot", {
                         "tick": report.tick,
                         "push_error": push_result.get("error")})
-            except Exception as exc:  # nunca deve propagar — tick verde
+            # push é rede: qualquer falha vira log e o tick permanece
+            # verde. Catch largo é o desenho (ver comentário acima).
+            except Exception as exc:  # noqa: BLE001
                 home.append_log("snapshot", {"tick": report.tick,
                                              "push_error": str(exc)})
         result = dataclasses.asdict(report)

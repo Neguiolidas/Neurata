@@ -22,8 +22,13 @@ from neurata.dedup import shingle_hashes
 from neurata.frontmatter import FrontmatterError, parse
 from neurata.grains import make_card, make_summary
 from neurata.home import NeurataHome
-from neurata.indexdb import (INDEX_SCHEMA_VERSION, IndexLock, connect,
-                             create_schema, drop_schema)
+from neurata.indexdb import (
+    INDEX_SCHEMA_VERSION,
+    IndexLock,
+    connect,
+    create_schema,
+    drop_schema,
+)
 from neurata.textnorm import normalize
 
 _WIKILINK = re.compile(r"\[\[([^\[\]]+)\]\]")

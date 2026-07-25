@@ -1,13 +1,22 @@
 """tests/test_indexdb.py"""
 import json
+import sqlite3
 
 import pytest
 
 from neurata.home import NeurataHome
 from neurata.indexdb import (
-    INDEX_SCHEMA_VERSION, IndexLock, IndexSchemaError, LockHeldError,
-    check_schema, connect, create_schema, drop_schema, ensure_fts5,
-    fts5_available, load_shingle_sets,
+    INDEX_SCHEMA_VERSION,
+    IndexLock,
+    IndexSchemaError,
+    LockHeldError,
+    check_schema,
+    connect,
+    create_schema,
+    drop_schema,
+    ensure_fts5,
+    fts5_available,
+    load_shingle_sets,
 )
 
 
@@ -39,7 +48,10 @@ def test_entries_constraints(tmp_path):
         " description, content_hash, created, updated, shingles)"
         " VALUES ('u1','s1','library/s1.md','library','note','generic',"
         " 't','', 'h1','2026-01-01','2026-01-01','[]')")
-    with pytest.raises(Exception):
+    # IntegrityError e não Exception: `raises(Exception)` passaria também
+    # se o INSERT quebrasse por erro de sintaxe, sem provar nada sobre o
+    # CHECK de `location`.
+    with pytest.raises(sqlite3.IntegrityError):
         con.execute(
             "INSERT INTO entries(id, slug, path, location, type, env, title,"
             " description, content_hash, created, updated, shingles)"
@@ -57,9 +69,8 @@ def test_drop_and_recreate(tmp_path):
 
 def test_lock_excludes_and_releases(tmp_path):
     home = _home(tmp_path)
-    with IndexLock(home):
-        with pytest.raises(LockHeldError):
-            IndexLock(home).__enter__()
+    with IndexLock(home), pytest.raises(LockHeldError):
+        IndexLock(home).__enter__()
     with IndexLock(home):
         pass
 
@@ -99,7 +110,7 @@ def test_check_schema_passes_and_no_side_effect(tmp_path):
 
 def test_entries_shingles_column_not_null(tmp_path):
     con = connect(_home(tmp_path))
-    with pytest.raises(Exception):
+    with pytest.raises(sqlite3.IntegrityError):  # NOT NULL de `shingles`
         con.execute(
             "INSERT INTO entries(id, slug, path, location, type, env,"
             " title, description, content_hash, created, updated)"

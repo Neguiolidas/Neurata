@@ -43,7 +43,7 @@ def load(home: NeurataHome) -> dict:
     except (OSError, ValueError) as exc:
         raise ConfigError(
             f"config.json malformado ({exc}) — restaure ou apague o arquivo "
-            "(sem ele, defaults assumem)")
+            "(sem ele, defaults assumem)") from exc
     if not isinstance(raw, dict):
         raise ConfigError(f"config.json deve ser objeto JSON — {_REMEDY}")
     unknown = sorted(set(raw) - _TOP_KEYS)

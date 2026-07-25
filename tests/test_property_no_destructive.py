@@ -11,6 +11,7 @@ sequência — mover pra quarantine preserva os bytes do corpo.
 `harvest` usa um fixture local (`skills_dir` sob `tmp_path`, fora do
 home) — nada de rede/FS real fora do diretório temporário do teste.
 """
+import contextlib
 import hashlib
 import random
 
@@ -59,7 +60,7 @@ def _all_bodies_by_hash(home) -> dict:
         for f in d.glob("*.md"):
             try:
                 meta, body = parse(f.read_text(encoding="utf-8"))
-            except Exception:
+            except Exception:  # noqa: BLE001 — arquivo ilegível não conta
                 continue
             chash = meta.get("content_hash") or hashlib.sha256(
                 body.encode("utf-8")).hexdigest()
@@ -107,27 +108,26 @@ def test_zero_operacao_destrutiva(tmp_path):
             for f in d.glob("*.md"):
                 try:
                     meta, body = parse(f.read_text(encoding="utf-8"))
-                except Exception:
+                except Exception:  # noqa: BLE001 — idem
                     continue
                 if meta.get("content_hash") == chash:
                     seen_bodies[chash] = body
                     return
 
     def op_query():
-        try:
+        # A invariante deste teste é "nada se perde", não "toda op passa":
+        # query com índice vazio/ausente pode falhar sem ser destrutiva.
+        with contextlib.suppress(Exception):
             query(home, rng.choice(_WORDS), limit=5)
-        except Exception:
-            pass  # query com índice vazio/ausente não é destrutivo
 
     def op_expand():
         if not known_ids:
             return
         eid = rng.choice(known_ids)
         grain = rng.choice(("card", "summary", "full"))
-        try:
+        # ref pode já ter migrado (rename/tombstone) — não destrutivo.
+        with contextlib.suppress(Exception):
             expand(home, eid, grain=grain)
-        except Exception:
-            pass  # ref pode já ter migrado (rename/tombstone) — não destrutivo
 
     def op_tick():
         curate_tick(home, budget=rng.choice((5, 10, 20)))

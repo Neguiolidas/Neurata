@@ -1,12 +1,15 @@
 """neurata/doctor.py — self-check com remediação. Nunca degrada em silêncio."""
+import hashlib
 import json
 import sqlite3
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from neurata import archive, config as query_config, snapshot, usage
-from neurata.frontmatter import FrontmatterError, parse as parse_frontmatter
+from neurata import archive, snapshot, usage
+from neurata import config as query_config
+from neurata.frontmatter import FrontmatterError
+from neurata.frontmatter import parse as parse_frontmatter
 from neurata.home import SCHEMA_VERSION, NeurataHome
 from neurata.indexdb import INDEX_SCHEMA_VERSION, fts5_available
 
@@ -147,17 +150,56 @@ def _meta(home: NeurataHome, key: str) -> "str | None":
         con.close()
 
 
+def _indexed_hashes(home: NeurataHome) -> "dict[str, str]":
+    """path relativo -> content_hash que o índice conhece."""
+    if not home.index_path.exists():
+        return {}
+    con = sqlite3.connect(home.index_path)
+    try:
+        return {row[0]: row[1] or ""
+                for row in con.execute(
+                    "SELECT path, content_hash FROM entries")}
+    except sqlite3.DatabaseError:  # índice ausente/corrompido: outro check
+        return {}
+    finally:
+        con.close()
+
+
+def _body_hash(path) -> "str | None":
+    """sha256 do corpo (sem frontmatter), no mesmo formato do índice.
+    None quando o arquivo não dá pra ler/parsear — aí não há como provar
+    que está indexado."""
+    try:
+        _, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, FrontmatterError):
+        return None
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
 def _freshness(home: NeurataHome) -> Check:
     last = _meta(home, "last_reindex")
     if last is None:
         return Check("index-freshness", "warn", "sem last_reindex",
                      "rode `neurata reindex`")
     last_ts = datetime.fromisoformat(last).timestamp()
-    # last_reindex tem resolução de segundos — floor dos dois lados
-    stale = [str(p.relative_to(home.root))
-             for base in (home.library, home.inbox)
-             for p in base.rglob("*.md")
-             if int(p.stat().st_mtime) > int(last_ts)]
+    # mtime é pista, não veredito: o tick reescreve na library arquivos que
+    # ele mesmo indexou (só `reindex` carimba last_reindex), então "mais
+    # novo que o carimbo" não implica "fora do índice". Confirma pelo hash
+    # do corpo — quem bate com o índice não está stale. Sem isso, um tick
+    # que cruza a virada do segundo faz o doctor sair 1 sem nada errado.
+    # last_reindex tem resolução de segundos — floor dos dois lados.
+    suspects = [p for base in (home.library, home.inbox)
+                for p in base.rglob("*.md")
+                if int(p.stat().st_mtime) > int(last_ts)]
+    known = _indexed_hashes(home) if suspects else {}
+    stale = []
+    for path in suspects:
+        rel = str(path.relative_to(home.root))
+        disk = _body_hash(path)
+        # disk is None: ilegível/frontmatter quebrado — não dá pra provar
+        # que o índice está em dia com ele; conta como stale.
+        if disk is None or known.get(rel) != disk:
+            stale.append(rel)
     if stale:
         return Check("index-freshness", "warn",
                      f"{len(stale)} arquivo(s) mais novos que o índice",

@@ -1,4 +1,6 @@
 """tests/test_query.py — end-to-end do pipeline."""
+import contextlib
+
 import pytest
 
 from neurata.home import NeurataHome
@@ -136,7 +138,7 @@ def test_malicious_queries_never_leak_fts_errors(tmp_path):
                 '{title}: x', 'a*b', 'a"b"c', '"“aspas tortas”"',
                 'a NOT b OR c', '-x --y', 'tok^2']
     for q in malignas:
-        try:
-            query(home, q)  # nunca sqlite3.OperationalError
-        except QueryError:
-            pass  # erro de uso é aceitável; erro de sintaxe FTS não
+        # QueryError (erro de uso) é aceitável; o que este teste proíbe é
+        # sqlite3.OperationalError — sintaxe FTS vazando pro usuário.
+        with contextlib.suppress(QueryError):
+            query(home, q)

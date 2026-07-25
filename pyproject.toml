@@ -13,7 +13,16 @@ dynamic = ["version"]
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "pyright", "bandit", "vulture"]
+# Linters presos ao minor. Sem teto, um release do linter reprova código
+# que não mudou — e o CI fica vermelho sem commit culpado. Subir a faixa
+# é ato deliberado, com o diff de regras novas na mão.
+dev = [
+  "pytest>=8,<9",
+  "ruff>=0.16,<0.17",
+  "pyright>=1.1.400,<2",
+  "bandit>=1.8,<2",
+  "vulture>=2.14,<3",
+]
 
 [project.scripts]
 neurata = "neurata.cli:main"
@@ -24,6 +33,38 @@ packages = ["neurata"]
 
 [tool.setuptools.dynamic]
 version = { attr = "neurata.__version__" }
+
+# ── ruff (linter) ───────────────────────────────────────────────────
+# `select` explícito: sem ele o ruff usa o default DELE, que muda entre
+# versões — foi assim que 49 erros apareceram em código que ninguém tocou.
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+  "E4", "E7", "E9",  # pycodestyle: imports, statements, sintaxe
+  "F",               # pyflakes
+  "I",               # ordem de import
+  "UP",              # idiomas mortos pro floor 3.10
+  "B",               # bugbear
+  "BLE",             # except Exception cego — precisa ser declarado
+  "SIM",             # simplificações
+  "PLE", "PLW",      # pylint: erros e warnings
+  "RUF",
+]
+ignore = [
+  # RUF001/002/003 caçam homoglifo (caractere que finge ser ASCII) em
+  # identificador, string e comentário. Aqui os comentários são prosa em
+  # português: travessão e `×` são intencionais e vão continuar aparecendo.
+  # Manter a regra seria fabricar noqa pra sempre.
+  "RUF001", "RUF002", "RUF003",
+]
+# Fora de propósito, não por incômodo:
+#   S    → bandit já cobre segurança (`bandit -r neurata/`); duas ferramentas
+#          na mesma regra só produz noqa duplicado.
+#   E5   → E501; comprimento de linha não é gate deste projeto.
+#   PYI  → regras de arquivo `.pyi`; o repo não tem stubs.
+#   PLR  → limiares de complexidade (nº de args, magic value): heurística.
 
 # ── pyright (type checker — substitui mypy) ─────────────────────────
 [tool.pyright]

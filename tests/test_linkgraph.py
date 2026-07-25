@@ -1,7 +1,6 @@
 """tests/test_linkgraph.py"""
 from neurata.linkgraph import neighbors, ppr
 
-
 _ADJ = {1: {2}, 2: {1, 3}, 3: {2}, 4: {5}, 5: {4}}
 
 

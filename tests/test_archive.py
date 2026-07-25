@@ -4,8 +4,14 @@ import zlib
 
 import pytest
 
-from neurata.archive import (ArchiveCorruptError, ArchiveMissingError,
-                             BadShaError, get, has, put)
+from neurata.archive import (
+    ArchiveCorruptError,
+    ArchiveMissingError,
+    BadShaError,
+    get,
+    has,
+    put,
+)
 from neurata.home import NeurataHome
 
 
@@ -17,7 +23,7 @@ def _home(tmp_path):
 
 def test_put_get_roundtrip(tmp_path):
     home = _home(tmp_path)
-    data = "Conteúdo original — bytes exatos.\n".encode("utf-8")
+    data = "Conteúdo original — bytes exatos.\n".encode()
     sha = put(home, data)
     assert sha == hashlib.sha256(data).hexdigest()
     assert get(home, sha) == data

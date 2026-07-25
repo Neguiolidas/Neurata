@@ -13,6 +13,7 @@ import subprocess
 
 from neurata.home import CONTRACT_VERSION, SCHEMA_VERSION
 from neurata.indexdb import INDEX_SCHEMA_VERSION, IndexLock, connect
+
 # Import top-level (não local): checado que `neurata.reindex` NÃO importa
 # `neurata.snapshot` nem `neurata.tick` — sem ciclo. Diferente do caso
 # `commit_tick`/`tick.py` (esse sim circular; daí o duck-typing citado
@@ -104,7 +105,10 @@ class SnapshotError(RuntimeError):
 def _run(home, *args, timeout=GIT_TIMEOUT, check=False) -> subprocess.CompletedProcess:
     cmd = ["git", "-C", str(home.library), *args]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        # check=False literal: quem decide sobre returncode é o `check`
+        # DESTA função, logo abaixo — o subprocess nunca levanta sozinho.
+        proc = subprocess.run(cmd, capture_output=True, text=True,
+                              timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         if check:
             raise SnapshotError(str(exc)) from exc
@@ -115,11 +119,14 @@ def _run(home, *args, timeout=GIT_TIMEOUT, check=False) -> subprocess.CompletedP
 
 
 def git_available() -> bool:
-    global _AVAIL
+    # _AVAIL é memo de processo: "git existe?" não muda durante uma
+    # execução, e cada tick chamaria isso dezenas de vezes. O global É a
+    # feature — sem ele, um subprocess por chamada.
+    global _AVAIL  # noqa: PLW0603
     if _AVAIL is None:
         try:
             proc = subprocess.run(["git", "--version"], capture_output=True,
-                                   text=True, timeout=GIT_TIMEOUT)
+                                   text=True, timeout=GIT_TIMEOUT, check=False)
         except (OSError, subprocess.TimeoutExpired):
             _AVAIL = False
         else:
@@ -264,7 +271,10 @@ def restore(home, ref: str) -> dict:
         con = connect(home)
         try:
             rx = _reindex_locked(home, con)
-        except Exception as exc:
+        # O restore do git já aconteceu. Qualquer falha do reindex tem que
+        # virar resultado estruturado ("need": "reindex"), nunca exceção —
+        # senão o chamador não sabe que a library mudou.
+        except Exception as exc:  # noqa: BLE001
             return {"ok": False, "restored_to": ref, "autosaved": autosaved,
                     "new_head": new_head, "need": "reindex",
                     "reindex_error": str(exc)}

@@ -5,9 +5,8 @@ parse facets → prefiltro (subquery rowid) → fan-out ≤6 MATCH → RRF
 """
 import sqlite3
 
-from neurata import config, linkgraph, router, rrf, shelf, usage
+from neurata import config, indexdb, linkgraph, router, rrf, shelf, usage
 from neurata.home import NeurataHome
-from neurata import indexdb
 from neurata.indexdb import connect
 
 _TOPN = 50    # candidatos por variante

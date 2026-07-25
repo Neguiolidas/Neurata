@@ -14,7 +14,8 @@ from datetime import datetime, timezone
 
 from neurata import config as query_config
 from neurata import usage
-from neurata.frontmatter import FrontmatterError, parse as parse_fm
+from neurata.frontmatter import FrontmatterError
+from neurata.frontmatter import parse as parse_fm
 from neurata.home import NeurataHome
 from neurata.indexdb import connect
 
@@ -41,10 +42,8 @@ def compute_score(cfg_shelf: dict, impressions: int, expands: int,
     w_c = cfg_shelf["w_c"]
     tau = cfg_shelf["tau_dias"]
     dt = _parse_iso(updated)
-    if dt is None:
-        delta_dias = 0.0
-    else:
-        delta_dias = max(0.0, (now - dt).total_seconds() / 86400.0)
+    delta_dias = 0.0 if dt is None else max(
+        0.0, (now - dt).total_seconds() / 86400.0)
     recencia = math.exp(-delta_dias / tau) if tau > 0 else 0.0
     curadoria = 1.0 if grain_quality == "refined" else 0.0
     return (w_u * math.log1p(uso_pond) + w_r * recencia + w_c * curadoria)
@@ -70,7 +69,7 @@ def apply_boost(cards: list[dict], beta: float) -> None:
     if not cards:
         return
     norm = normalize([c["shelf_score"] for c in cards])
-    for card, n in zip(cards, norm):
+    for card, n in zip(cards, norm, strict=True):
         card["score"] = card["score"] * (1 + beta * n)
 
 

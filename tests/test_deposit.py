@@ -48,7 +48,7 @@ def test_deposit_from_file(tmp_path):
     src.write_text("# Título do doc\ncorpo")
     rec = deposit(home, file=src)
     assert rec["action"] == "created"
-    meta, _ = parse(list(home.inbox.glob("*.md"))[0].read_text())
+    meta, _ = parse(next(iter(home.inbox.glob("*.md"))).read_text())
     assert meta["source"]["origin"] == str(src)
 
 
@@ -118,7 +118,7 @@ def test_git_envelope_flattened_in_frontmatter_nested_in_log(tmp_path):
     # Rodar do root do repo Neurata dá git context de graça no envelope.
     home = _home(tmp_path)
     rec = deposit(home, "conteúdo com git context")
-    meta, _ = parse(list(home.inbox.glob("*.md"))[0].read_text())
+    meta, _ = parse(next(iter(home.inbox.glob("*.md"))).read_text())
     # source é dict 1 nível de escalares — round-trip via parse prova subset.
     assert meta["source"]["git_commit"]
     assert meta["source"]["git_branch"]

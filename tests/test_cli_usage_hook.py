@@ -4,9 +4,9 @@ Cada chamada da CLI que chega a criar o home grava 1 linha em
 NEURATA_HOME/usage.log (cmd, duration_ms, ok). Erros de parse (antes do
 home) não geram linha. O log é best-effort: nunca altera o exit code.
 """
+from neurata.cli import main
 from neurata.home import NeurataHome
 from neurata.usage import read_invocations
-from neurata.cli import main
 
 
 def _home(tmp_path, monkeypatch):

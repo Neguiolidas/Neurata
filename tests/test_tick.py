@@ -13,8 +13,12 @@ from neurata.home import NeurataHome
 from neurata.indexdb import connect
 from neurata.reindex import reindex
 from neurata.snapshot import list_snapshots
-from neurata.tick import TickReport, TickStructuralError, curate_tick
-from neurata.tick import _sync_update_in_place
+from neurata.tick import (
+    TickReport,
+    TickStructuralError,
+    _sync_update_in_place,
+    curate_tick,
+)
 from neurata.tick import _journal as _write_journal
 
 
@@ -308,7 +312,7 @@ def test_conflict_journal_failure_does_not_increment_conflict_counter(
     lib_id = "01LIBBASEID0000000000000"
     _lib_entry(home, "base.md", lib_id, "Base", body)
     reindex(home)
-    inbox_body = " ".join(words + ["extra1", "extra2"]) + ".\n"
+    inbox_body = " ".join([*words, "extra1", "extra2"]) + ".\n"
     _inbox(home, "novo.md",
           f"---\nid: 01NEWWITHNEARDUP000000\ntitle: Novo\n---\n{inbox_body}")
     _fail_append_log_for_verb(monkeypatch, home, "conflict")
@@ -521,7 +525,7 @@ def test_near_dup_above_threshold_marks_conflict(tmp_path):
     lib_id = "01LIBBASEID0000000000000"
     _lib_entry(home, "base.md", lib_id, "Base", body)
     reindex(home)
-    inbox_body = " ".join(words + ["extra1", "extra2"]) + ".\n"
+    inbox_body = " ".join([*words, "extra1", "extra2"]) + ".\n"
     _inbox(home, "novo.md",
           f"---\nid: 01NEWWITHNEARDUP000000\ntitle: Novo\n---\n{inbox_body}")
 
@@ -567,7 +571,7 @@ def test_near_dup_tie_picks_smaller_ulid(tmp_path):
     _lib_entry(home, "b.md", "01BBBBBBBBBBBBBBBBBBBBBB", "B entry maior", body)
     _lib_entry(home, "a.md", "01AAAAAAAAAAAAAAAAAAAAAA", "A entry menor", body)
     reindex(home)
-    inbox_body = " ".join(words + ["extra1", "extra2"]) + ".\n"
+    inbox_body = " ".join([*words, "extra1", "extra2"]) + ".\n"
     _inbox(home, "novo.md",
           f"---\nid: 01NOVO0000000000000000\ntitle: Novo\n---\n{inbox_body}")
 
@@ -586,7 +590,7 @@ def test_existing_conflicts_with_not_rejournaled(tmp_path):
     lib_id = "01LIBBASEID0000000000000"
     _lib_entry(home, "base.md", lib_id, "Base", body)
     reindex(home)
-    inbox_body = " ".join(words + ["extra1", "extra2"]) + ".\n"
+    inbox_body = " ".join([*words, "extra1", "extra2"]) + ".\n"
     text = (f"---\nid: 01NEWWITHMARK00000000\ntitle: Marcado\n"
            f"conflicts_with: [{lib_id}]\n---\n{inbox_body}")
     _inbox(home, "novo.md", text)
@@ -738,7 +742,7 @@ def test_skill_item_new_cataloged_with_source_key_no_near_dup(tmp_path):
     _lib_entry(home, "base.md", "01LIBBASEID0000000000000", "Base",
               similar_body)
     reindex(home)
-    skill_body = " ".join(words + ["extra1", "extra2"]) + ".\n"
+    skill_body = " ".join([*words, "extra1", "extra2"]) + ".\n"
     _skill_item(home, "skill.md", "01SKILLNEW0000000000000",
                "claude-code:foo", "Foo Skill", skill_body)
 

@@ -19,9 +19,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from neurata.home import NeurataHome  # noqa: E402
-from neurata.query import query  # noqa: E402
-from neurata.reindex import reindex  # noqa: E402
+from neurata.home import NeurataHome
+from neurata.query import query
+from neurata.reindex import reindex
 
 N_NOTES = 500
 N_QUERIES = 120

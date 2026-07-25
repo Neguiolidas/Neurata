@@ -1,5 +1,5 @@
 """tests/test_dedup.py — shingles, hashing, Jaccard (dedup near-dup)."""
-from neurata.dedup import (MIN_WORDS, SHINGLE_N, jaccard, shingle_hashes)
+from neurata.dedup import MIN_WORDS, SHINGLE_N, jaccard, shingle_hashes
 
 
 def test_shingle_hashes_deterministic():

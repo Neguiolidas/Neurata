@@ -180,12 +180,12 @@ class IndexLock:
     def __enter__(self) -> "IndexLock":
         try:
             self._acquire()
-        except FileExistsError:
+        except FileExistsError as exc:
             if self._is_stale():
                 self.path.unlink(missing_ok=True)
                 self._acquire()
             else:
-                raise LockHeldError(f"lock ativo: {self.path}")
+                raise LockHeldError(f"lock ativo: {self.path}") from exc
         return self
 
     def __exit__(self, *exc: object) -> None:

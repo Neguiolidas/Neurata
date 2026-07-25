@@ -90,7 +90,9 @@ def curate_tick(home: NeurataHome, budget: "int | None" = None) -> TickReport:
         try:
             if ensure_repo(home):
                 report.snapshot = commit_tick(home, report)
-        except Exception as exc:
+        # Snapshot é acessório: falha vira log e o tick continua verde. Se
+        # propagasse, uma falha de git derrubaria a curadoria inteira.
+        except Exception as exc:  # noqa: BLE001
             home.append_log("snapshot", {"tick": tick_id, "error": str(exc)})
             report.snapshot = None
 
@@ -173,7 +175,7 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
             if not isinstance(existing, list):
                 existing = [existing] if existing else []
             if target_id not in existing:
-                meta["conflicts_with"] = existing + [target_id]
+                meta["conflicts_with"] = [*existing, target_id]
                 conflict_new = True
             else:
                 meta["conflicts_with"] = existing
@@ -456,9 +458,7 @@ def _is_safe_journal_path(path: "str | None") -> bool:
     pure = PurePosixPath(path)
     if pure.is_absolute():
         return False
-    if ".." in pure.parts:
-        return False
-    return True
+    return ".." not in pure.parts
 
 
 def _journal(home: NeurataHome, tick_id: str, verb: str,
@@ -526,8 +526,13 @@ def _reconcile_renames(home: NeurataHome, con, tick_id: str,
     for chash, candidates_entries in missing_by_hash.items():
         candidates_entries.sort(key=lambda t: t[1])  # menor ULID ganha
         candidates_files = sorted(disk_by_hash.get(chash, []))
-        for (rowid, eid, old_path), new_path in zip(candidates_entries,
-                                                     candidates_files):
+        # strict=False deliberado: as listas têm tamanhos diferentes por
+        # natureza (n entradas órfãs × m arquivos com o mesmo hash). Parear
+        # até acabar a menor É a detecção de rename; o resto sobra pro
+        # laço de entrada morta abaixo.
+        for (_rowid, eid, old_path), new_path in zip(candidates_entries,
+                                                     candidates_files,
+                                                     strict=False):
             con.execute("UPDATE entries SET path=? WHERE id=?",
                        (new_path, eid))
             con.commit()
@@ -541,7 +546,7 @@ def _reconcile_renames(home: NeurataHome, con, tick_id: str,
 
     # entrada morta: sem arquivo e sem par por hash → remove (índice é
     # cache; estado > história).
-    for rowid, eid, old_path, chash in missing:
+    for rowid, eid, old_path, _chash in missing:
         if eid in handled:
             continue
         con.execute("DELETE FROM entries_fts WHERE rowid=?", (rowid,))

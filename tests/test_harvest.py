@@ -3,10 +3,10 @@ import hashlib
 
 import pytest
 
+from neurata.frontmatter import parse
 from neurata.harvest import REGISTRY, harvest
 from neurata.home import NeurataHome
-from neurata.indexdb import connect, drop_schema
-from neurata.frontmatter import parse
+from neurata.indexdb import IndexSchemaError, connect, drop_schema
 
 
 def _mkhome(tmp_path):
@@ -74,7 +74,7 @@ def test_harvest_reharvest_unchanged_emits_nothing(tmp_path):
     harvest(home, "claude-code", skills_dir=skills_dir)
     # Simula reindex: entra na library com o mesmo source_key/content_hash.
     f = _inbox_files(home)[0]
-    meta, body = parse(f.read_text(encoding="utf-8"))
+    meta, _body = parse(f.read_text(encoding="utf-8"))
     con = connect(home)
     con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
@@ -111,7 +111,7 @@ def test_harvest_changed_skill_emits_update(tmp_path):
     home = _mkhome(tmp_path)
     skills_dir = tmp_path / "skills"
     _write_skill(skills_dir, "a", name="a-skill", body="Corpo A.\n")
-    f_meta, _ = parse((skills_dir / "a" / "SKILL.md").read_text())
+    _f_meta, _ = parse((skills_dir / "a" / "SKILL.md").read_text())
     con = connect(home)
     body = "Corpo A.\n"
     chash = hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -132,7 +132,7 @@ def test_harvest_changed_skill_emits_update(tmp_path):
     assert report.harvested == 0
     files = _inbox_files(home)
     assert len(files) == 1
-    meta, body2 = parse(files[0].read_text(encoding="utf-8"))
+    _meta, body2 = parse(files[0].read_text(encoding="utf-8"))
     assert body2 == "Corpo A mudou.\n"
 
 
@@ -213,7 +213,9 @@ def test_harvest_v5_index_requires_reindex(tmp_path):
     con.commit()
     con.close()
 
-    with pytest.raises(Exception):
+    # Tipo exato: schema futuro tem que abortar por versão incompatível,
+    # não por um AttributeError qualquer no caminho.
+    with pytest.raises(IndexSchemaError):
         harvest(home, "claude-code", skills_dir=tmp_path / "skills")
 
 

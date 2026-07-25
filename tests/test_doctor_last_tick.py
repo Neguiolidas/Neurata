@@ -3,6 +3,7 @@
 Lê o maior ts de cmd:"tick" no usage.log. ok ≤ 2h; warn > 2h; warn se
 ausente. Nunca fail (cron parado não corrompe nada).
 """
+import json
 from datetime import datetime, timedelta, timezone
 
 from neurata.doctor import _last_tick
@@ -18,8 +19,8 @@ def _home(tmp_path):
 
 def _write_tick(home, when):
     # escreve uma linha de tick com ts arbitrário direto no usage.log
-    line = ('{"ts":"%s","cmd":"tick","duration_ms":5,"ok":true}\n'
-            % when.isoformat(timespec="seconds"))
+    line = json.dumps({"ts": when.isoformat(timespec="seconds"),
+                       "cmd": "tick", "duration_ms": 5, "ok": True}) + "\n"
     (home.root / "usage.log").write_text(line, encoding="utf-8")
 
 

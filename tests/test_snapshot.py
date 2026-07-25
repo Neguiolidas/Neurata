@@ -5,14 +5,25 @@ import subprocess
 import pytest
 
 from neurata import snapshot
-from neurata.home import CONTRACT_VERSION, NeurataHome, SCHEMA_VERSION
+from neurata.home import CONTRACT_VERSION, SCHEMA_VERSION, NeurataHome
 from neurata.indexdb import INDEX_SCHEMA_VERSION
 from neurata.query import query
 from neurata.reindex import reindex
 from neurata.snapshot import (
-    SnapshotError, _tick_body, _tick_subject, commit, commit_manual,
-    commit_tick, ensure_repo, git_available, has_changes, list_snapshots,
-    push, restore, restore_dry_run, set_remote,
+    SnapshotError,
+    _tick_body,
+    _tick_subject,
+    commit,
+    commit_manual,
+    commit_tick,
+    ensure_repo,
+    git_available,
+    has_changes,
+    list_snapshots,
+    push,
+    restore,
+    restore_dry_run,
+    set_remote,
 )
 from neurata.tick import TickReport
 
@@ -395,7 +406,7 @@ def test_restore_forward_only_head_advances_and_ref_stays_reachable(tmp_path):
     assert new_head != ref1
     ancestor = subprocess.run(
         ["git", "-C", str(home.library), "merge-base", "--is-ancestor",
-         ref1, new_head])
+         ref1, new_head], check=False)
     assert ancestor.returncode == 0
 
 
