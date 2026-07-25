@@ -39,6 +39,7 @@ def run_checks(home: NeurataHome) -> list[Check]:
     checks.append(_archive(home))
     checks.append(_usage(home))
     checks.append(_last_tick(home))
+    checks.append(_gate(home))
     checks.append(_snapshot(home))
     return checks
 
@@ -242,6 +243,39 @@ def _last_tick(home: NeurataHome) -> Check:
                      f"último tick há ~{hours}h ({last})",
                      "cron do tick parado? confira o crontab")
     return Check("last-tick", "ok", f"último tick={last}")
+
+
+_GATE_WINDOW_DAYS = 14
+_GATE_TARGET_DAYS = 10
+
+
+def _gate(home: NeurataHome) -> Check:
+    """Gate de dogfooding da v1.0: >= 10 dias distintos com >= 1 comando
+    real (não-tick) numa janela corrida de 14 dias. Sempre `ok` — é um
+    medidor de progresso, não um erro: parcial mostra `N/10`, atingido
+    mostra `PASSED`. Nunca `warn`, nunca `fail`. Lê o log de invocações
+    (usage.log); ts ilegível ou tick não contam."""
+    entries = usage.read_invocations(home)["entries"]
+    dates = set()
+    for e in entries:
+        if e.get("cmd") == "tick":
+            continue
+        try:
+            dates.add(datetime.fromisoformat(e["ts"]).date())
+        except (ValueError, TypeError):
+            continue
+    days = sorted(dates)
+    best = 0
+    for start in days:
+        end = start + timedelta(days=_GATE_WINDOW_DAYS - 1)
+        best = max(best, sum(1 for d in days if start <= d <= end))
+    if best >= _GATE_TARGET_DAYS:
+        return Check("gate", "ok",
+                     f"PASSED ({best} dias distintos em janela de "
+                     f"{_GATE_WINDOW_DAYS}d)")
+    return Check("gate", "ok",
+                 f"{best}/{_GATE_TARGET_DAYS} dias distintos (melhor janela "
+                 f"de {_GATE_WINDOW_DAYS}d) — precisa de uso real contínuo")
 
 
 def _lock(home: NeurataHome) -> Check:

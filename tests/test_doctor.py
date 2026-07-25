@@ -78,7 +78,7 @@ def test_corrupt_index_fails_cleanly(tmp_path):
     home = _home(tmp_path)
     home.index_path.write_bytes(b"\x00lixo que nao e sqlite\xff\xfe")
     checks = run_checks(home)  # nao pode explodir
-    assert len(checks) == 14  # todos os checks presentes (inclui last-tick)
+    assert len(checks) == 15  # todos os checks presentes (inclui last-tick, gate)
     by = _by_name(checks)
     assert by["index"].status == "fail"
     assert by["index"].remedy
