@@ -57,6 +57,21 @@ def test_size_cap(tmp_path):
         deposit(_home(tmp_path), "x" * 2_000_001)
 
 
+def test_empty_and_whitespace_only_rejected(tmp_path):
+    home = _home(tmp_path)
+    with pytest.raises(DepositError, match="vazio"):
+        deposit(home, "")
+    with pytest.raises(DepositError, match="vazio"):
+        deposit(home, "   \n\t  ")
+    # arquivo whitespace-only também é rejeitado
+    src = tmp_path / "blank.md"
+    src.write_text("  \n  ")
+    with pytest.raises(DepositError, match="vazio"):
+        deposit(home, file=src)
+    assert list(home.inbox.glob("*.md")) == []
+    assert home.read_log("deposits") == []
+
+
 def test_requires_exactly_one_source(tmp_path):
     home = _home(tmp_path)
     with pytest.raises(DepositError):

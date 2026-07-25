@@ -35,6 +35,8 @@ def deposit(home: NeurataHome, content: "str | None" = None,
     assert content is not None
     if len(content.encode("utf-8")) > MAX_BYTES:
         raise DepositError(f"depósito excede o cap de {MAX_BYTES} bytes")
+    if not content.strip():
+        raise DepositError("depósito vazio: conteúdo sem texto")
 
     content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
     envelope = capture(origin=origin, agent=agent, session=session)
