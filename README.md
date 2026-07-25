@@ -6,6 +6,10 @@
   <b>Deposit raw, curate quietly, retrieve at the right moment.</b>
 </p>
 
+<p align="center">
+  <a href="https://github.com/Neguiolidas/Neurata/actions/workflows/ci.yml"><img src="https://github.com/Neguiolidas/Neurata/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+</p>
+
 The living knowledge layer for an agent's **environment** (CLI, IDE,
 framework). Companion to [Conscio](https://github.com/Neguiolidas/Conscio),
 which minds the agent itself; Neurata minds the agent's world: skills,
@@ -13,35 +17,39 @@ tools, docs, decisions — catalogued, curated, retrievable.
 
 ## Install
 
-Neurata runs from a dedicated venv (zero runtime deps, but isolated from
-the system Python):
+```bash
+pip install neurata
+```
+
+*(Once published to PyPI — until then, install editable from a dedicated
+venv:)*
 
 ```bash
 python3 -m venv ~/.venvs/neurata
 ~/.venvs/neurata/bin/pip install -e /path/to/Neurata
-ln -sf ~/.venvs/neurata/bin/neurata ~/.local/bin/neurata
-ln -sf ~/.venvs/neurata/bin/neu     ~/.local/bin/neu
+ln -sf ~/.venvs/neurata/bin/neurata ~/.local/bin/neurata   # if ~/.local/bin is on PATH
 ```
 
-`~/.local/bin` must be on your PATH. The archive lives in `~/.neurata`
-(override with `NEURATA_HOME`).
+Zero runtime deps. The archive lives in `~/.neurata` (override with
+`NEURATA_HOME`). `neu` is installed alongside `neurata` as a typing
+convenience — docs always use `neurata`.
 
 ## Use
 
 ```bash
 # deposit (stdin via '-', or positional text)
-echo "raw content" | neu deposit -
-neu deposit "raw content" --title "Note"
+echo "raw content" | neurata deposit -
+neurata deposit "raw content" --title "Note"
 
 # catalogue the inbox (mechanical, reversible — nothing is destroyed)
-neu tick
+neurata tick
 
 # query (deterministic lexical)
-neu query "term"
-neu expand <id>          # card → summary → full
+neurata query "term"
+neurata expand <id>          # card → summary → full
 
 # archive health
-neu doctor
+neurata doctor
 ```
 
 ## Automatic curation
@@ -52,7 +60,7 @@ neu doctor
 0 * * * * $HOME/.local/bin/neurata tick >> $HOME/.neurata/logs/cron-tick.log 2>&1
 ```
 
-`neu doctor` warns (`last-tick`) if the cron stops.
+`neurata doctor` warns (`last-tick`) if the cron stops.
 
 **Principles**
 
@@ -61,6 +69,6 @@ neu doctor
 - Nothing is ever destroyed: archive + quarantine, never delete.
 - Zero runtime dependencies. Python ≥ 3.10.
 
-**Status:** release candidate (v0.9). Not yet on PyPI.
+**Status:** v0.9 — 1.0 dogfooding gate in progress. Not yet on PyPI.
 
 **License:** AGPL-3.0-or-later.
