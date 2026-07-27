@@ -542,8 +542,34 @@ def test_harvest_bad_target(tmp_path, monkeypatch, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is False
     assert out["error"]["code"] == "UsageError"
-    assert "invalid choice: 'bogus'" in out["error"]["message"]
+    # source agora é provider OU diretório: 'bogus' não é nenhum dos dois.
+    assert "fonte desconhecida: 'bogus'" in out["error"]["message"]
     assert "claude-code" in out["error"]["message"]
+
+
+def test_harvest_provider_rejects_dir_flags(tmp_path, monkeypatch, capsys):
+    """--format/--target só fazem sentido colhendo diretório, não provider."""
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    capsys.readouterr()
+
+    rc = main(["harvest", "claude-code", "--format", "markdown", "--json"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["error"]["code"] == "UsageError"
+    assert "--format" in out["error"]["message"]
+    assert "provider nomeado" in out["error"]["message"]
+
+
+def test_harvest_dir_without_usable_label(tmp_path, monkeypatch, capsys):
+    """`harvest /` não tem nome de diretório para virar rótulo."""
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    capsys.readouterr()
+
+    rc = main(["harvest", "/", "--json"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["error"]["code"] == "UsageError"
+    assert "--target" in out["error"]["message"]
 
 
 def test_harvest_schema_mismatch(tmp_path, monkeypatch, capsys):
