@@ -5,6 +5,7 @@ import dataclasses
 import json
 import sys
 import time
+from pathlib import Path
 
 from neurata.compact import compact
 from neurata.config import ConfigError
@@ -13,10 +14,11 @@ from neurata.deposit import DepositError, deposit
 from neurata.doctor import exit_code, run_checks
 from neurata.entryref import EntryAmbiguousError, EntryNotFoundError
 from neurata.expand import _GRAINS, ExpandError, expand
-from neurata.harvest import REGISTRY
+from neurata.harvest import REGISTRY, validate_target
 from neurata.harvest import harvest as run_harvest
 from neurata.home import CONTRACT_VERSION, NeurataHome
 from neurata.indexdb import FTS5MissingError, IndexSchemaError, LockHeldError
+from neurata.providers.generic import FORMATS
 from neurata.query import QueryError, query
 from neurata.reindex import reindex
 from neurata.shelf import conflicts as shelf_conflicts
@@ -90,6 +92,34 @@ def main(argv: "list[str] | None" = None) -> int:
     return rc
 
 
+def _harvest_kwargs(args: argparse.Namespace) -> dict:
+    """`harvest <source>` → kwargs de `harvest()`. Levanta `UsageError`.
+
+    `source` é provider nomeado OU diretório; nome de provider ganha do
+    diretório homônimo (o default `claude-code` não pode depender do cwd).
+    """
+    if args.source in REGISTRY:
+        extra = ("--target" if args.target else
+                 "--format" if args.fmt != "auto" else None)
+        if extra:
+            raise UsageError(
+                f"{extra} só vale ao colher um diretório; "
+                f"'{args.source}' é um provider nomeado")
+        return {"target": args.source}
+
+    source_dir = Path(args.source).expanduser()
+    if not source_dir.is_dir():
+        raise UsageError(
+            f"fonte desconhecida: '{args.source}' não é um provider "
+            f"({', '.join(REGISTRY)}) nem um diretório existente")
+    target = args.target or source_dir.resolve().name
+    try:
+        validate_target(target)
+    except ValueError as e:
+        raise UsageError(f"rótulo inválido: {e}; passe --target explícito") from e
+    return {"target": target, "source_dir": source_dir, "fmt": args.fmt}
+
+
 def _dispatch(args: argparse.Namespace, home: NeurataHome) -> tuple[dict, int]:
     if args.command == "deposit":
         text = args.text
@@ -141,7 +171,7 @@ def _dispatch(args: argparse.Namespace, home: NeurataHome) -> tuple[dict, int]:
         result = dataclasses.asdict(report)
         return result, (2 if report.errors else 0)
     if args.command == "harvest":
-        harvest_report = run_harvest(home, args.target)
+        harvest_report = run_harvest(home, **_harvest_kwargs(args))
         return dataclasses.asdict(harvest_report), 0
     if args.command == "snapshot":
         return _dispatch_snapshot(args, home)
@@ -277,9 +307,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
     hrv = sub.add_parser("harvest",
                          help="providers externos → inbox (utilitário)")
-    hrv.add_argument("target", nargs="?", default="claude-code",
-                     choices=tuple(REGISTRY),
-                     help="fonte a colher (default: claude-code)")
+    hrv.add_argument("source", nargs="?", default="claude-code",
+                     help=f"provider ({', '.join(REGISTRY)}) ou um diretório "
+                          f"a colher (default: claude-code)")
+    hrv.add_argument("--format", dest="fmt", default="auto",
+                     choices=FORMATS,
+                     help="formato dos arquivos ao colher um diretório "
+                          "(default: auto — detecta por arquivo)")
+    hrv.add_argument("--target", default=None,
+                     help="rótulo dos itens colhidos de um diretório "
+                          "(default: nome do diretório)")
     hrv.add_argument("--json", action="store_true",
                      default=argparse.SUPPRESS)
 
