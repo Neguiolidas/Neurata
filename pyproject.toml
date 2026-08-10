@@ -99,13 +99,32 @@ reportMissingTypeStubs = "none"
 # ── bandit (security linter) ────────────────────────────────────────
 [tool.bandit]
 targets = ["neurata"]
-severity = "medium"
-confidence = "medium"
+# `severity`/`confidence` moravam aqui e NÃO são chaves de config do
+# bandit — só flags de CLI (-ll/-ii). Eram ignoradas em silêncio, e o
+# gate real era mais rígido que o declarado. O filtro agora é explícito
+# por teste, pra que `bandit -c pyproject.toml -r neurata/` dê o mesmo
+# veredito nesta máquina e na CI.
 skips = [
   "B101",  # assert_used — pytest usa assert natural
+  # Chamamos `git` de propósito (snapshot/envelope), sempre com argv em
+  # lista e nunca com `shell=True`. B602 (shell=True), que é o teste com
+  # sinal de verdade, segue ligado — assim como B608 (SQL), dispensado
+  # caso a caso no `query.py`.
+  "B404",  # import subprocess
+  "B603",  # subprocess sem shell=True — advisory genérico
+  "B607",  # `git` pelo PATH em vez de caminho absoluto (portabilidade)
 ]
 
 # ── vulture (dead code finder) ──────────────────────────────────────
 [tool.vulture]
-paths = ["neurata"]
+# `tests` entra no escopo porque quem LÊ os contadores de report
+# (`renamed`, `reconciled`, `harvested`, `removed`, …) é a suíte. Com
+# `paths = ["neurata"]` o vulture só via o `+= 1` e acusava 15 campos
+# vivos como mortos — ruído que treina a gente a ignorar o gate.
+paths = ["neurata", "tests"]
 min_confidence = 60
+# Fixtures são chamadas pelo pytest, não pelo código; e stubs plugados
+# via monkeypatch precisam aceitar os parâmetros da função original
+# mesmo sem usá-los. Nenhum dos dois é código morto.
+ignore_decorators = ["@pytest.fixture"]
+ignore_names = ["*_arg"]

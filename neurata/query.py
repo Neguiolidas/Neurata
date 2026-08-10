@@ -2,6 +2,13 @@
 
 parse facets → prefiltro (subquery rowid) → fan-out ≤6 MATCH → RRF
 → união com vizinhos 1-hop → PPR aditivo → boost skill → cards.
+
+Invariante de SQL (justifica os `# nosec B608` espalhados aqui): todo
+valor vindo do usuário viaja em parâmetro `?`. O que é interpolado em
+f-string se limita a três coisas geradas por nós — `marks`, que é
+literalmente `",".join("?" * n)`; `pre_sql`, montado em `_prefilter`
+só com cláusulas literais; e constantes de módulo (`_SNIP_*`, int).
+Ao mexer nestas queries, manter a invariante ou remover o `nosec`.
 """
 import sqlite3
 
@@ -65,14 +72,14 @@ def _prefilter(parsed: router.ParsedQuery) -> "tuple[str | None, list]":
         params.append(tag)
     if not clauses:
         return None, []
-    return ("SELECT e.rowid FROM entries e WHERE " + " AND ".join(clauses),
-            params)
+    return ("SELECT e.rowid FROM entries e WHERE "  # nosec B608
+            + " AND ".join(clauses), params)
 
 
 def _facet_listing(con: sqlite3.Connection, pre_sql: str, pre_params: list,
                    limit: int) -> list[dict]:
     rows = con.execute(
-        "SELECT rowid, id, slug, title, description, type, path"
+        "SELECT rowid, id, slug, title, description, type, path"  # nosec B608
         f" FROM entries WHERE rowid IN ({pre_sql})"
         " ORDER BY updated DESC, rowid LIMIT ?",
         [*pre_params, limit]).fetchall()
@@ -88,7 +95,7 @@ def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
     snippets: dict[int, str] = {}
     for var in router.variants(parsed):
         snip_col = _SNIP_RAW if var.name == "raw" else _SNIP_NORM
-        sql = (f"SELECT rowid, snippet(entries_fts, {snip_col},"
+        sql = (f"SELECT rowid, snippet(entries_fts, {snip_col},"  # nosec B608
                " '[', ']', '…', 12)"
                " FROM entries_fts WHERE entries_fts MATCH ?")
         params: list = [var.match]
@@ -146,7 +153,7 @@ def _apply_shelf(con: sqlite3.Connection, home: NeurataHome,
     rowids = [rowid_of[c["id"]] for c in cards]
     marks = ",".join("?" * len(rowids))
     rows = con.execute(
-        f"SELECT rowid, updated, grain_quality FROM entries"
+        f"SELECT rowid, updated, grain_quality FROM entries"  # nosec B608
         f" WHERE rowid IN ({marks})", rowids).fetchall()
     meta = {r[0]: (r[1], r[2]) for r in rows}
     agg = usage.read_usage(home)["entries"]
@@ -169,7 +176,7 @@ def _filter_rowids(con: sqlite3.Connection, rowids: set[int],
         return rowids
     marks = ",".join("?" * len(rowids))
     rows = con.execute(
-        f"SELECT rowid FROM ({pre_sql}) WHERE rowid IN ({marks})",
+        f"SELECT rowid FROM ({pre_sql}) WHERE rowid IN ({marks})",  # nosec B608
         [*pre_params, *sorted(rowids)]).fetchall()
     return {r[0] for r in rows}
 
@@ -179,7 +186,7 @@ def _fetch_entries(con: sqlite3.Connection, rowids: list[int]) -> list:
         return []
     marks = ",".join("?" * len(rowids))
     return con.execute(
-        "SELECT rowid, id, slug, title, description, type, path"
+        "SELECT rowid, id, slug, title, description, type, path"  # nosec B608
         f" FROM entries WHERE rowid IN ({marks})",
         sorted(rowids)).fetchall()
 
