@@ -14,3 +14,9 @@ graphify-out/
 # raiz, e docs/ guarda só arte (docs/assets/). Padrão, não nome fixo: o
 # próximo relatório já nasce ignorado.
 docs/*.md
+
+# Neurata é biblioteca, não aplicação: quem instala resolve as versões
+# no ambiente dele, e quem manda são os ranges do pyproject. Versionar o
+# lock daria a ilusão de um ambiente reprodutível que o consumidor não
+# usa, e ainda viraria fonte de conflito a cada `uv` que alguém rodar.
+uv.lock
