@@ -8,3 +8,9 @@ dist/
 docs/superpowers/
 .superpowers/
 graphify-out/
+
+# Notas de sessão, relatórios de campo e auditorias caem soltos em docs/.
+# Nada disso é doc do Neurata — a doc pública vive em README/CHANGELOG na
+# raiz, e docs/ guarda só arte (docs/assets/). Padrão, não nome fixo: o
+# próximo relatório já nasce ignorado.
+docs/*.md
