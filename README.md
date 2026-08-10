@@ -25,8 +25,9 @@ pip install neurata
 venv:)*
 
 ```bash
+git clone https://github.com/Neguiolidas/Neurata
 python3 -m venv ~/.venvs/neurata
-~/.venvs/neurata/bin/pip install -e /path/to/Neurata
+~/.venvs/neurata/bin/pip install -e ./Neurata
 ln -sf ~/.venvs/neurata/bin/neurata ~/.local/bin/neurata   # if ~/.local/bin is on PATH
 ```
 
@@ -69,6 +70,7 @@ neurata doctor
 - Nothing is ever destroyed: archive + quarantine, never delete.
 - Zero runtime dependencies. Python ≥ 3.10.
 
-**Status:** v0.9 — 1.0 dogfooding gate in progress. Not yet on PyPI.
+**Status:** v0.9 — the 1.0 dogfooding gate is cleared (`neurata doctor`
+checks it). Not yet on PyPI.
 
 **License:** AGPL-3.0-or-later.

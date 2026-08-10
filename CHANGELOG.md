@@ -1,14 +1,56 @@
 # Changelog
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-Pre-1.0 versions are an internal dogfooding cycle (private repo);
-spec milestones v0.4–v0.7 shipped under the 0.8.0 release.
+Pre-1.0 versions were an internal dogfooding cycle; spec milestones
+v0.4–v0.7 shipped under the 0.8.0 release.
 
 ## [Unreleased]
-- Fix: YAML adapter reads `info.name`/`info.description` on the regex
-  path too. Without PyYAML installed an OpenAPI doc fell back to the
+
+### Added
+- `harvest` accepts arbitrary directories, not just the Claude Code
+  skill layout: recursive generic provider (size, symlink, binary and
+  permission guards) plus format adapters (`skill-md`, `markdown`,
+  `yaml`, `rules`) auto-detected by suffix, with heuristic fallback —
+  `neurata harvest <dir> [--target T] [--format F]`, where the source
+  is either a named provider (`claude-code`) or a directory, and `F` is
+  one of `auto`, `skill-md`, `markdown`, `yaml`, `rules`. Harvested
+  items are namespaced `<target>@<hash of the resolved dir>` and keyed
+  `<namespace>:<relpath>`, so equal basenames from different sources
+  stop colliding. The harvested root may never contain `NEURATA_HOME`.
+- `doctor`: `gate` check — the 1.0 dogfooding gate (10 real days of
+  use inside a 14-day window). 15 checks total.
+- Tag-driven release workflow (test → version guard → build → publish
+  over OIDC) and packaging metadata in `pyproject.toml`.
+
+### Fixed
+- `doctor`: `index-freshness` warned falsely. It compared mtime against
+  `last_reindex`, but only `reindex` stamps that field — a `tick`
+  crossing a second boundary rewrote the library and looked stale. The
+  verdict now comes from the content hash against the index, with mtime
+  as a hint only.
+- `deposit` rejects empty or whitespace-only input instead of filing a
+  blank note.
+- YAML adapter reads `info.name`/`info.description` on the regex path
+  too. Without PyYAML installed an OpenAPI doc fell back to the
   filename, so the title changed depending on an optional dependency —
   the same file could enter the index twice.
+- CI: the version guard job installs the package before importing
+  `__version__`, which failed with `ModuleNotFoundError` on every tag
+  push.
+- Lint gates stated one thing and ran another: `severity`/`confidence`
+  under `[tool.bandit]` are CLI flags, not config keys, so the gate
+  silently ran at low/low; replaced by explicit skips of `B404`, `B603`
+  and `B607` (`git` is called on purpose, always with an argv list) and
+  case-by-case `nosec` on `B608`, with `shell=True` (`B602`) still on.
+  `vulture` scanned only `neurata/`, so report counters incremented
+  from the tests read as dead code (15 false positives); it now covers
+  `tests` and exempts what is by definition never called by our code —
+  pytest fixtures and the parameters monkeypatch stubs must accept.
+- Tests: the `os.stat` stub delegates to the real stat and overrides
+  only `st_dev` (`real.st_dev + 1`). It used to swap the whole module's
+  `os.stat` for an object carrying just `st_dev`, so every stat in the
+  process hit it and `pathlib` broke on 3.11/3.12 (`is_dir()` reads
+  `st_mode`) — the test passed on 3.10 and 3.13 by accident.
 
 ## [0.9.0] - 2026-07-24
 - Usage invocation log (`usage.log`, one line per CLI call) with
