@@ -481,13 +481,27 @@ def test_cross_device_raises_before_touching_inbox(tmp_path, monkeypatch):
     real_stat = os.stat
 
     class _FakeStat:
-        def __init__(self, dev):
+        """stat real com `st_dev` trocado.
+
+        Os demais campos precisam continuar verdadeiros: `neurata.tick.os`
+        É o módulo `os` global, então o patch abaixo vale pro processo
+        inteiro, e o `glob()` das asserções finais também passa por aqui.
+        Quais campos o pathlib lê varia por versão (3.11/3.12 leem
+        `st_mode` em `is_dir()`), então delegamos em vez de adivinhar.
+        """
+
+        def __init__(self, real, dev):
+            self._real = real
             self.st_dev = dev
 
+        def __getattr__(self, name):
+            return getattr(self._real, name)
+
     def fake_stat(path, *a, **kw):
+        real = real_stat(path, *a, **kw)
         if str(path) == str(home.library):
-            return _FakeStat(999999)
-        return real_stat(path, *a, **kw)
+            return _FakeStat(real, real.st_dev + 1)
+        return real
 
     monkeypatch.setattr("neurata.tick.os.stat", fake_stat)
 
