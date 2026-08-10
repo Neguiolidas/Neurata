@@ -10,6 +10,7 @@ Nota: `import yaml` aqui é absoluto (Python 3), então resolve pro PyYAML
 de topo, não pra este módulo homônimo.
 """
 import re
+from functools import cache
 from pathlib import Path
 
 from neurata.providers.generic import Scanned, oneline
@@ -19,17 +20,47 @@ try:  # pragma: no cover - depende do ambiente
 except ImportError:  # pragma: no cover
     _yaml = None
 
-#: Chaves de topo, na ordem de precedência. `re.M` + `^\S` garante nível
-#: raiz: `  name:` indentado é campo de outro objeto, não título do doc.
-_TOP_KEY = r"^{key}:[ \t]*(?:\"|')?(.+?)(?:\"|')?[ \t]*$"
-_NAME_RE = re.compile(_TOP_KEY.format(key="name"), re.MULTILINE)
-_ID_RE = re.compile(_TOP_KEY.format(key="id"), re.MULTILINE)
-_DESC_RE = re.compile(_TOP_KEY.format(key="description"), re.MULTILINE)
+#: Chave ancorada numa indentação. `re.M` + âncora garante o nível certo:
+#: `  name:` indentado é campo de outro objeto, não título do doc — exceto
+#: quando é filho direto de `info:` (ver `_from_info`).
+_KEY = r"^{indent}{key}:[ \t]*(?:\"|')?(.+?)(?:\"|')?[ \t]*$"
+
+
+@cache
+def _key_re(key: str, indent: str = "") -> "re.Pattern[str]":
+    return re.compile(_KEY.format(indent=re.escape(indent), key=key),
+                      re.MULTILINE)
+
+
+_NAME_RE = _key_re("name")
+_ID_RE = _key_re("id")
+_DESC_RE = _key_re("description")
+
+#: Bloco `info:` com suas linhas indentadas (OpenAPI, agent cards…).
+_INFO_RE = re.compile(r"^info:[ \t]*\n((?:[ \t]+.*\n?)+)", re.MULTILINE)
 
 
 def _from_regex(text: str, pattern: "re.Pattern[str]") -> "str | None":
     match = pattern.search(text)
     return match.group(1) if match else None
+
+
+def _from_info(text: str, key: str) -> "str | None":
+    """`info.<key>` — só filho DIRETO, igual a `doc["info"][key]` no PyYAML.
+
+    Sem isto o caminho regex não enxerga `info.name`, e o título de um doc
+    OpenAPI passa a depender de PyYAML estar instalado.
+    """
+    block = _INFO_RE.search(text)
+    if not block:
+        return None
+    body = block.group(1)
+    lines = [line for line in body.splitlines() if line.strip()]
+    if not lines:
+        return None
+    indent = min((line[:len(line) - len(line.lstrip())] for line in lines),
+                 key=len)
+    return _from_regex(body, _key_re(key, indent))
 
 
 def _first_str(*values: object) -> "str | None":
@@ -42,6 +73,8 @@ def _first_str(*values: object) -> "str | None":
 
 def _from_yaml(text: str) -> "tuple[str | None, str | None]":
     """(title, description) via PyYAML, ou (None, None) se não der."""
+    if _yaml is None:  # pragma: no cover - depende do ambiente
+        return None, None
     try:
         doc = _yaml.safe_load(text)
     except Exception:  # noqa: BLE001 - YAML torto cai pro regex
@@ -56,14 +89,14 @@ def _from_yaml(text: str) -> "tuple[str | None, str | None]":
 
 
 def parse(path: Path, text: str) -> "Scanned | None":
-    title = desc = None
-    if _yaml is not None:
-        title, desc = _from_yaml(text)
+    title, desc = _from_yaml(text)
     if title is None:
         title = _first_str(_from_regex(text, _NAME_RE),
-                           _from_regex(text, _ID_RE))
+                           _from_regex(text, _ID_RE),
+                           _from_info(text, "name"))
     if desc is None:
-        desc = _from_regex(text, _DESC_RE)
+        desc = _first_str(_from_regex(text, _DESC_RE),
+                          _from_info(text, "description"))
     return Scanned(
         name=oneline(title or path.stem, 120) or path.stem,
         description=oneline(desc or text),

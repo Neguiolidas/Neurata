@@ -5,6 +5,10 @@ Pre-1.0 versions are an internal dogfooding cycle (private repo);
 spec milestones v0.4–v0.7 shipped under the 0.8.0 release.
 
 ## [Unreleased]
+- Fix: YAML adapter reads `info.name`/`info.description` on the regex
+  path too. Without PyYAML installed an OpenAPI doc fell back to the
+  filename, so the title changed depending on an optional dependency —
+  the same file could enter the index twice.
 
 ## [0.9.0] - 2026-07-24
 - Usage invocation log (`usage.log`, one line per CLI call) with

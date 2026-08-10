@@ -136,6 +136,38 @@ def test_yaml_openapi_info_name(tmp_path):
     assert item.description == "rotas"
 
 
+@pytest.mark.parametrize("text,name,desc", [
+    ("id: agent-001\nname: Agente Foo\ndescription: faz foo\n",
+     "Agente Foo", "faz foo"),
+    ("id: agent-001\nversion: 2\n", "agent-001", None),
+    ("openapi: 3.0.0\ninfo:\n  name: API de Foo\n  description: rotas\n",
+     "API de Foo", "rotas"),
+])
+def test_yaml_titulo_independe_de_pyyaml(tmp_path, monkeypatch, text, name,
+                                         desc):
+    """Instalar/desinstalar PyYAML não pode mudar título nem descrição.
+
+    Se mudar, o mesmo arquivo entra duas vezes no índice. PyYAML é dep
+    opcional: sem este teste a suíte só exercita o caminho de quem o tem
+    instalado — foi assim que `info.name` ficou sem fallback no regex.
+    """
+    com_yaml = yaml_fmt.parse(tmp_path / "a.yaml", text)
+    monkeypatch.setattr(yaml_fmt, "_yaml", None)
+    sem_yaml = yaml_fmt.parse(tmp_path / "a.yaml", text)
+
+    assert com_yaml.name == sem_yaml.name == name
+    if desc is not None:
+        assert com_yaml.description == sem_yaml.description == desc
+
+
+def test_yaml_info_ignora_neto(tmp_path, monkeypatch):
+    """`info.contact.name` é neto: não é título, com ou sem PyYAML."""
+    text = "openapi: 3.0.0\ninfo:\n  contact:\n    name: Zé\n"
+    monkeypatch.setattr(yaml_fmt, "_yaml", None)
+    item = yaml_fmt.parse(tmp_path / "api.yaml", text)
+    assert item.name == "api"
+
+
 def test_yaml_invalid_falls_back_to_regex(tmp_path):
     """YAML torto ainda tem título se a linha `name:` existir."""
     text = "name: Meio Torto\n\t- lista: [inválida\n"
