@@ -47,6 +47,7 @@ neurata tick
 
 # query (deterministic lexical)
 neurata query "term"
+neurata query "term regime:curated"   # facet: curated library / mirror inbox
 neurata expand <id>          # card → summary → full
 
 # archive health

@@ -18,11 +18,32 @@ v0.4–v0.7 shipped under the 0.8.0 release.
   `<namespace>:<relpath>`, so equal basenames from different sources
   stop colliding. The harvested root may never contain `NEURATA_HOME`.
 - `doctor`: `gate` check — the 1.0 dogfooding gate (10 real days of
-  use inside a 14-day window). 15 checks total.
+  use inside a 14-day window).
+- Two-regime library. `regime` is a column derived from `location`
+  (`Library/` → `curated`, `inbox/` → `mirror`), never a field anyone
+  writes: the mirror is a re-syncable reflection of external sources,
+  the curated side is what the archive owns. Search gained the facet
+  `regime:` (`neurata query "term regime:curated"`), a dedicated
+  `curated_fts` lane, and a guaranteed floor of curated results in the
+  top-k footer — `regime.curated_quota` (default 3, capped at
+  `limit // 2`) so a large mirror can never crowd the library out.
+- `doctor`: `regime` check — the derived column against `location` and
+  the curated lane against `entries`. 16 checks total.
 - Tag-driven release workflow (test → version guard → build → publish
   over OIDC) and packaging metadata in `pyproject.toml`.
 
+### Changed
+- `INDEX_SCHEMA_VERSION` 6 → 7. The index rebuilds itself on the next
+  operation; the files are untouched (the index is a disposable cache).
+- `compact` is monotonic: it refuses to demote a grain that is already
+  refined, so re-running the Miner over a compacted archive can no
+  longer trade a summary back for a raw body.
+
 ### Fixed
+- Morphology was rewriting the whole query instead of expanding terms:
+  `notas de datapipe` also ran as `nota de datapipe`, a reading that
+  competed with the real one and pushed legitimate documents off the
+  page. Each token now carries its own number variant.
 - `doctor`: `index-freshness` warned falsely. It compared mtime against
   `last_reindex`, but only `reindex` stamps that field — a `tick`
   crossing a second boundary rewrote the library and looked stale. The
