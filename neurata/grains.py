@@ -8,6 +8,12 @@ parágrafos. Fence-aware: heading dentro de ``` não é heading.
 grain_quality 'refined' é v2.0 — aqui tudo é mechanical. Regra
 anti-summary-de-summary (corpo compactado ⇒ summary = corpo) fica no
 reindex, que conhece o frontmatter.
+
+Este módulo é o **Miner**: produção mecânica de grão (card e summary) a partir
+do corpo, determinística e sem julgamento. O DeepMiner — produção refinada,
+`grain_quality = 'refined'` — é outro componente, de outra fase; a fronteira
+entre os dois é a monotonicidade: o Miner nunca sobrescreve o que o DeepMiner
+produziu.
 """
 import re
 
