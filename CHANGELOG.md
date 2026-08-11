@@ -19,16 +19,20 @@ v0.4–v0.7 shipped under the 0.8.0 release.
   stop colliding. The harvested root may never contain `NEURATA_HOME`.
 - `doctor`: `gate` check — the 1.0 dogfooding gate (10 real days of
   use inside a 14-day window).
-- Two-regime library. `regime` is a column derived from `location`
-  (`Library/` → `curated`, `inbox/` → `mirror`), never a field anyone
-  writes: the mirror is a re-syncable reflection of external sources,
-  the curated side is what the archive owns. Search gained the facet
-  `regime:` (`neurata query "term regime:curated"`), a dedicated
-  `curated_fts` lane, and a guaranteed floor of curated results in the
-  top-k footer — `regime.curated_quota` (default 3, capped at
-  `limit // 2`) so a large mirror can never crowd the library out.
-- `doctor`: `regime` check — the derived column against `location` and
-  the curated lane against `entries`. 16 checks total.
+- Two-regime library. Both regimes live in `Library/`; what tells them
+  apart is `source_key`, which only `tick` writes when it mirrors an
+  external source. `regime` is derived from its presence (`mirror` when
+  set, `curated` otherwise) and is never a field anyone authors, so the
+  index and the files cannot disagree. The mirror is a re-syncable
+  reflection of someone else's source; the curated side is what the
+  archive owns. Search gained the facet `regime:` (`neurata query "term
+  regime:curated"`), a dedicated `curated_fts` lane, and a guaranteed
+  floor of curated results in the top-k footer —
+  `regime.curated_quota` (default 3, capped at `limit // 2`) so a large
+  mirror can never crowd the library out.
+- `doctor`: `regime` check — fails on a mirrored grain marked as
+  refined (curation the next `tick` would overwrite) and on a
+  `curated_fts` lane out of sync with `entries`. 16 checks total.
 - Tag-driven release workflow (test → version guard → build → publish
   over OIDC) and packaging metadata in `pyproject.toml`.
 
