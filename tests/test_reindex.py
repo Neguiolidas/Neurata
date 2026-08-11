@@ -187,16 +187,21 @@ def test_reindex_source_key_null_when_absent(tmp_path):
     assert row[0] is None
 
 
-def test_reindex_rebuilds_v5_index_to_v6(tmp_path):
+def test_reindex_rebuilds_v6_index_to_v7(tmp_path):
+    """Índice v6 real em disco (sem `regime`): abrir e reindexar tem de
+    funcionar. Regressão do crash em que `connect()` criava índice sobre
+    a coluna nova numa `entries` legada e estourava OperationalError —
+    quebrando até o próprio `reindex`, único caminho de recuperação."""
     from neurata.indexdb import INDEX_SCHEMA_VERSION
 
     home = _home(tmp_path)
     (home.library / "a.md").write_text("---\nid: 01A\ntitle: A\n---\nx\n")
     con = connect(home)
-    # simula índice v5 pré-existente: derruba a coluna source_key
-    # recriando a tabela entries sem ela, e grava meta version=5.
+    # simula índice v6 pré-existente: recria entries sem a coluna regime
+    # (e sem o índice sobre ela), e grava meta version=6.
     con.executescript(
         "DROP TABLE entries; DROP TABLE entries_fts;"
+        "DROP INDEX IF EXISTS idx_entries_regime;"
         "CREATE TABLE entries(rowid INTEGER PRIMARY KEY, id TEXT NOT NULL"
         " UNIQUE, slug TEXT NOT NULL UNIQUE, path TEXT NOT NULL,"
         " location TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'note',"
@@ -205,12 +210,12 @@ def test_reindex_rebuilds_v5_index_to_v6(tmp_path):
         " content_hash TEXT NOT NULL, created TEXT NOT NULL,"
         " updated TEXT NOT NULL,"
         " grain_quality TEXT NOT NULL DEFAULT 'mechanical',"
-        " shingles TEXT NOT NULL);"
+        " shingles TEXT NOT NULL, source_key TEXT);"
         "CREATE VIRTUAL TABLE entries_fts USING fts5(title, aliases, tags,"
         " body, title_norm, aliases_norm, tags_norm, body_norm,"
         " prefix='2 3 4');")
     con.execute(
-        "INSERT OR REPLACE INTO meta VALUES ('index_schema_version', '5')")
+        "INSERT OR REPLACE INTO meta VALUES ('index_schema_version', '6')")
     con.commit()
     con.close()
 
@@ -218,11 +223,14 @@ def test_reindex_rebuilds_v5_index_to_v6(tmp_path):
     assert result["indexed"] == 1
     con = connect(home)
     cols = {r[1] for r in con.execute("PRAGMA table_info(entries)")}
+    assert "regime" in cols
     assert "source_key" in cols
+    indexes = {r[1] for r in con.execute("PRAGMA index_list(entries)")}
+    assert "idx_entries_regime" in indexes
     version = con.execute(
         "SELECT value FROM meta WHERE key='index_schema_version'"
     ).fetchone()[0]
-    assert version == str(INDEX_SCHEMA_VERSION) == "6"
+    assert version == str(INDEX_SCHEMA_VERSION) == "7"
 
 
 def test_reindex_locked_matches_public_reindex(tmp_path):

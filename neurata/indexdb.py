@@ -15,8 +15,8 @@ _REMEDY = (
 
 # Versão do schema do ÍNDICE (meta 'index_schema_version'); distinta do
 # SCHEMA_VERSION do config em home.py. Só o reindex grava; check_schema
-# (público) checa — v6: coluna `source_key` (Phase 1/v0.5 harvest).
-INDEX_SCHEMA_VERSION = 6
+# (público) checa — v7: coluna `regime` e pista `curated_fts` (dois regimes).
+INDEX_SCHEMA_VERSION = 7
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -54,14 +54,37 @@ CREATE TABLE IF NOT EXISTS entries(
   updated TEXT NOT NULL,
   grain_quality TEXT NOT NULL DEFAULT 'mechanical',
   shingles TEXT NOT NULL,
-  source_key TEXT
+  source_key TEXT,
+  regime TEXT NOT NULL DEFAULT 'curated'
+         CHECK(regime IN ('mirror', 'curated'))
 );
 """
+
+# Índices sobre `entries` ficam fora de `_SCHEMA`: `CREATE TABLE IF NOT
+# EXISTS` não altera uma `entries` legada (v5/v6) já em disco, então criar
+# índice sobre coluna nova falharia com OperationalError dentro de
+# `connect()` — inclusive no `reindex`, o único comando capaz de consertar.
+# Índice sobre tabela legada não tem uso: `reindex` a derruba e recria.
+_ENTRIES_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS idx_entries_regime ON entries(regime)",
+)
 
 _FTS = ("CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5("
         "title, aliases, tags, body, "
         "title_norm, aliases_norm, tags_norm, body_norm, "
         "prefix='2 3 4')")
+
+
+def regime_of(meta: dict) -> str:
+    """Regime derivado do dialeto do frontmatter — nunca autorado.
+
+    `source_key` é escrito só pelo `tick` ao espelhar uma fonte externa; sua
+    presença é a definição de grão espelhado. Todo o resto (envelope `source:`
+    do deposit, grão escrito à mão) é curado. Derivar em vez de ler uma chave
+    `regime:` do arquivo elimina o único modo de falha que importa aqui:
+    índice e arquivo discordarem.
+    """
+    return "mirror" if meta.get("source_key") else "curated"
 
 
 class FTS5MissingError(RuntimeError):
@@ -122,9 +145,16 @@ def ensure_fts5(con: sqlite3.Connection) -> None:
         raise FTS5MissingError()
 
 
+def entries_columns(con: sqlite3.Connection) -> set:
+    return {row[1] for row in con.execute("PRAGMA table_info(entries)")}
+
+
 def create_schema(con: sqlite3.Connection) -> None:
     con.executescript(_SCHEMA)
     con.execute(_FTS)
+    if "regime" in entries_columns(con):
+        for ddl in _ENTRIES_INDEXES:
+            con.execute(ddl)
     con.commit()
 
 

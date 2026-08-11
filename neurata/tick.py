@@ -22,7 +22,7 @@ from neurata import indexdb
 from neurata.dedup import NEAR_DUP_JACCARD, jaccard, shingle_hashes
 from neurata.frontmatter import FrontmatterError, parse, serialize
 from neurata.home import NeurataHome
-from neurata.indexdb import IndexLock, connect
+from neurata.indexdb import IndexLock, connect, regime_of
 from neurata.snapshot import commit_tick, ensure_repo
 from neurata.textnorm import normalize, slugify
 from neurata.ulid import new_ulid
@@ -685,8 +685,8 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
-        " grain_quality, shingles, source_key)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " grain_quality, shingles, source_key, regime)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
          title, description,
@@ -694,7 +694,8 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
          str(meta.get("created", "")),
          str(meta.get("updated", meta.get("created", ""))),
          grain_quality, shingles_json,
-         str(source_key) if source_key else None))
+         str(source_key) if source_key else None,
+         regime_of(meta)))
     rowid = cur.lastrowid
     assert rowid is not None
     con.execute(

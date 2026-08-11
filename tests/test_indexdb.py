@@ -149,16 +149,16 @@ def test_create_schema_has_source_key_column(tmp_path):
     assert "source_key" in column_names
 
 
-def test_index_schema_version_is_6():
-    """Teste RED: INDEX_SCHEMA_VERSION deve ser 6."""
-    assert INDEX_SCHEMA_VERSION == 6
+def test_index_schema_version_is_7():
+    """v7 = coluna `regime` + pista `curated_fts`."""
+    assert INDEX_SCHEMA_VERSION == 7
 
 
-def test_check_schema_raises_on_v5_index(tmp_path):
-    """Teste RED: check_schema com índice v5 deve levantar IndexSchemaError."""
+def test_check_schema_raises_on_v6_index(tmp_path):
+    """check_schema com índice v6 (pré-regime) deve levantar."""
     con = connect(_home(tmp_path))
     con.execute("INSERT OR REPLACE INTO meta VALUES ('index_schema_version',"
-                " ?)", (str(5),))
+                " ?)", (str(6),))
     con.commit()
     with pytest.raises(IndexSchemaError):
         check_schema(con)
@@ -186,7 +186,7 @@ def test_check_schema_raises_on_v5_index_even_when_not_requiring_reindexed(tmp_p
     que só afeta o caso de índice nunca-reindexado (sem linha em meta)."""
     con = connect(_home(tmp_path))
     con.execute("INSERT OR REPLACE INTO meta VALUES ('index_schema_version',"
-                " ?)", (str(5),))
+                " ?)", (str(6),))
     con.commit()
     with pytest.raises(IndexSchemaError):
         check_schema(con, require_reindexed=False)
