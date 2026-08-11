@@ -36,6 +36,7 @@ def run_checks(home: NeurataHome) -> list[Check]:
     checks.append(_fts5(home))
     checks.append(_index(home))
     checks.append(_index_schema(home))
+    checks.append(_regime(home))
     checks.append(_freshness(home))
     checks.append(_skipped(home))
     checks.append(_lock(home))
@@ -107,6 +108,47 @@ def _index_schema(home: NeurataHome) -> Check:
                      "rode `neurata reindex`")
     return Check("index-schema", "ok",
                  f"index_schema_version={INDEX_SCHEMA_VERSION}")
+
+
+def _regime(home: NeurataHome) -> Check:
+    """Invariante espelho ⇒ mecânico (spec §5.1b) e pista em dia.
+
+    `fail`, não `warn`, nos dois casos: grão espelhado marcado como refinado é
+    curadoria que o próximo `tick` apaga ao re-sincronizar o corpo contra a
+    fonte; pista dessincronizada é busca respondendo sobre grão que não
+    existe mais. Descobrir qualquer um dos dois pelo estrago é o que este
+    check impede."""
+    if not home.index_path.exists():
+        return Check("regime", "ok", "index.db ausente (ver check index)")
+    con = sqlite3.connect(home.index_path)
+    try:
+        violacoes = [r[0] for r in con.execute(
+            "SELECT id FROM entries WHERE regime = 'mirror'"
+            " AND grain_quality != 'mechanical' ORDER BY id LIMIT 5")]
+        n_mirror, n_curated = con.execute(
+            "SELECT SUM(regime = 'mirror'), SUM(regime = 'curated')"
+            " FROM entries").fetchone()
+        n_pista = con.execute("SELECT COUNT(*) FROM curated_fts").fetchone()[0]
+    except sqlite3.DatabaseError as exc:
+        return Check("regime", "warn", f"índice ilegível ({exc})",
+                     "rode `neurata reindex`")
+    finally:
+        con.close()
+    if violacoes:
+        return Check(
+            "regime", "fail",
+            f"grão(s) espelhado(s) marcados como refinados: {violacoes}",
+            "o próximo `tick` sobrescreve esse corpo a partir da fonte — "
+            "mova o refino pra um grão curado (`neurata deposit`) ou volte "
+            "grain_quality pra 'mechanical'")
+    if n_pista != (n_curated or 0):
+        return Check(
+            "regime", "fail",
+            f"pista curada dessincronizada: curated_fts={n_pista}, "
+            f"entries curadas={n_curated or 0}",
+            "rode `neurata reindex` (o índice é cache descartável)")
+    return Check("regime", "ok",
+                 f"mirror={n_mirror or 0} curated={n_curated or 0}")
 
 
 def _fts5(home: NeurataHome) -> Check:

@@ -110,3 +110,15 @@ def test_snapshot_unknown_subkey_fails(tmp_path):
     home.config_path.write_text(json.dumps({"snapshot": {"branch": "main"}}))
     with pytest.raises(ConfigError, match="desconhecida"):
         load(home)
+
+
+def test_regime_quota_default_e_validada(tmp_path):
+    home = _home(tmp_path)
+    assert load(home)["regime"]["curated_quota"] == 3
+    home.config_path.write_text(
+        json.dumps({"regime": {"curated_quota": "tres"}}))
+    with pytest.raises(ConfigError, match="regime"):
+        load(home)
+    home.config_path.write_text(json.dumps({"regime": {"cota": 3}}))
+    with pytest.raises(ConfigError, match="desconhecida"):
+        load(home)

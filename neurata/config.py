@@ -17,6 +17,7 @@ DEFAULTS: dict = {
     "skill_boost": 1.5,
     "shelf": {"w_u": 1.0, "w_r": 1.0, "w_c": 0.5, "tau_dias": 30.0,
               "beta": 0.15},
+    "regime": {"curated_quota": 3},
     "snapshot": {"remote": None, "auto_push": False},
 }
 # schema_version pertence ao config desde a fase 1 (home.init escreve).

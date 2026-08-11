@@ -8,6 +8,7 @@ from datetime import datetime
 from neurata import archive, snapshot
 from neurata.deposit import deposit
 from neurata.doctor import _meta, exit_code, run_checks
+from neurata.frontmatter import serialize
 from neurata.home import NeurataHome
 from neurata.reindex import reindex
 from neurata.tick import curate_tick
@@ -80,7 +81,7 @@ def test_corrupt_index_fails_cleanly(tmp_path):
     home = _home(tmp_path)
     home.index_path.write_bytes(b"\x00lixo que nao e sqlite\xff\xfe")
     checks = run_checks(home)  # nao pode explodir
-    assert len(checks) == 15  # todos os checks presentes (inclui last-tick, gate)
+    assert len(checks) == 16  # todos os checks presentes (inclui last-tick, gate)
     by = _by_name(checks)
     assert by["index"].status == "fail"
     assert by["index"].remedy
@@ -220,3 +221,42 @@ def test_snapshot_auto_push_without_remote_warns(tmp_path):
     check = _by_name(run_checks(home))["snapshot"]
     assert check.status == "warn"
     assert "auto_push" in check.detail
+
+
+def test_regime_ok(tmp_path):
+    home = _home(tmp_path)
+    reindex(home)
+    check = _by_name(run_checks(home))["regime"]
+    assert check.status == "ok"
+
+
+def test_regime_detecta_espelho_refinado(tmp_path):
+    home = _home(tmp_path)
+    meta = {"id": "e1", "title": "espelho", "source_key": "skill:a",
+            "source_path": "a/SKILL.md", "grain_quality": "refined",
+            "created": "2026-08-10T00:00:00+00:00",
+            "updated": "2026-08-10T00:00:00+00:00"}
+    (home.library / "e1.md").write_text(serialize(meta, "corpo"),
+                                        encoding="utf-8")
+    reindex(home)
+    check = _by_name(run_checks(home))["regime"]
+    assert check.status == "fail"
+    assert "e1" in check.detail
+    assert check.remedy
+
+
+def test_regime_detecta_pista_dessincronizada(tmp_path):
+    home = _home(tmp_path)
+    meta = {"id": "c1", "title": "curado",
+            "created": "2026-08-10T00:00:00+00:00",
+            "updated": "2026-08-10T00:00:00+00:00"}
+    (home.library / "c1.md").write_text(serialize(meta, "corpo"),
+                                        encoding="utf-8")
+    reindex(home)
+    con = sqlite3.connect(home.index_path)
+    con.execute("DELETE FROM curated_fts")   # simula o writer que esqueceu
+    con.commit()
+    con.close()
+    check = _by_name(run_checks(home))["regime"]
+    assert check.status == "fail"
+    assert "reindex" in check.remedy

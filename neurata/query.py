@@ -17,6 +17,7 @@ from neurata.home import NeurataHome
 from neurata.indexdb import connect
 
 _TOPN = 50    # candidatos por variante
+_LANE_TOPN = 20  # candidatos por variante na pista curada (corpus pequeno)
 _SEEDS = 10   # seeds do PPR (top do RRF)
 _SNIP_RAW = 3   # índice da coluna body no FTS
 _SNIP_NORM = 7  # índice da coluna body_norm
@@ -86,29 +87,42 @@ def _facet_listing(con: sqlite3.Connection, pre_sql: str, pre_params: list,
     return [_card(r, score=None, snippet=None, via="facet") for r in rows]
 
 
-def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
-            pre_sql: "str | None", pre_params: list,
-            limit: int, home: NeurataHome) -> list[dict]:
+def _fanout(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
+            table: str, pre_sql: "str | None", pre_params: list, topn: int,
+            snippets: dict) -> list:
+    """Fan-out FTS por variante -> lista (peso, rowids) pro RRF.
+
+    `table` é `entries_fts` ou `curated_fts` — mesma ordem de colunas nas
+    duas, então os índices de snippet valem para ambas. `snippets` é
+    preenchido in-place: a variante `raw` roda primeiro, então o `setdefault`
+    preserva o trecho mais fiel ao que o usuário digitou."""
     w = cfg["bm25_weights"]
     bm25_args = [w["title"], w["aliases"], w["tags"], w["body"]] * 2
     ranked: list[tuple[float, list[int]]] = []
-    snippets: dict[int, str] = {}
     for var in router.variants(parsed):
         snip_col = _SNIP_RAW if var.name == "raw" else _SNIP_NORM
-        sql = (f"SELECT rowid, snippet(entries_fts, {snip_col},"  # nosec B608
+        sql = (f"SELECT rowid, snippet({table}, {snip_col},"  # nosec B608
                " '[', ']', '…', 12)"
-               " FROM entries_fts WHERE entries_fts MATCH ?")
+               f" FROM {table} WHERE {table} MATCH ?")
         params: list = [var.match]
         if pre_sql:
-            sql += f" AND rowid IN ({pre_sql})"
+            sql += f" AND rowid IN ({pre_sql})"  # nosec B608
             params.extend(pre_params)
-        sql += " ORDER BY bm25(entries_fts, ?,?,?,?,?,?,?,?) LIMIT ?"
-        params.extend([*bm25_args, _TOPN])
+        sql += f" ORDER BY bm25({table}, ?,?,?,?,?,?,?,?) LIMIT ?"
+        params.extend([*bm25_args, topn])
         rows = con.execute(sql, params).fetchall()
-        ranked.append((cfg["variant_weights"][var.name],
-                       [r[0] for r in rows]))
+        ranked.append((cfg["variant_weights"][var.name], [r[0] for r in rows]))
         for rowid, snip in rows:
-            snippets.setdefault(rowid, snip)  # raw roda primeiro: preferência
+            snippets.setdefault(rowid, snip)
+    return ranked
+
+
+def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
+            pre_sql: "str | None", pre_params: list,
+            limit: int, home: NeurataHome) -> list[dict]:
+    snippets: dict[int, str] = {}
+    ranked = _fanout(con, cfg, parsed, "entries_fts", pre_sql, pre_params,
+                     _TOPN, snippets)
     scores = rrf.fuse(ranked, cfg["rrf_k"])
     final = dict(scores)
     via = {r: "lexical" for r in scores}
@@ -140,9 +154,62 @@ def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
         cards.append(card)
     cards.sort(key=lambda c: (-c["score"], c["slug"]))
     top = cards[:limit]
-    _apply_shelf(con, home, cfg["shelf"], top, rowid_of)
+    need = _quota(parsed, cfg, limit) - len(
+        _curados(con, [rowid_of[c["id"]] for c in top]))
+    extra: list[dict] = []
+    if need > 0:
+        extra = _curated_lane(con, cfg, parsed, pre_sql, pre_params, need,
+                              {c["id"] for c in top}, rowid_of)
+        top = top[:limit - len(extra)]
+    _apply_shelf(con, home, cfg["shelf"], top + extra, rowid_of)
+    # Os dois segmentos ordenam separado: a cota é rodapé por decisão de
+    # política, não por score. Um sort único jogaria o curado pro topo e
+    # regrediria a cabeça do ranking (ver "As quatro medições" no plano).
     top.sort(key=lambda c: (-c["score"], c["slug"]))
-    return top
+    extra.sort(key=lambda c: (-c["score"], c["slug"]))
+    return top + extra
+
+
+def _quota(parsed: router.ParsedQuery, cfg: dict, limit: int) -> int:
+    """Slots reservados ao regime curado neste top-k.
+
+    Zero quando o usuário pediu regime explícito — a faceta é soberana sobre
+    a política default. Nunca mais que metade dos slots: com `limit=1` a cota
+    tomaria o único resultado da consulta."""
+    if "regime" in parsed.facets:
+        return 0
+    return min(int(cfg["regime"]["curated_quota"]), limit // 2)
+
+
+def _curated_lane(con: sqlite3.Connection, cfg: dict,
+                  parsed: router.ParsedQuery, pre_sql: "str | None",
+                  pre_params: list, need: int, ja_no_top: set,
+                  rowid_of: dict) -> list[dict]:
+    """Os `need` melhores grãos curados que o pool principal não trouxe.
+
+    Busca de novo em `curated_fts` em vez de re-ordenar o pool porque o pool
+    não os contém: com o espelho saturando o `LIMIT _TOPN` por variante, o
+    grão curado nem chega a ser candidato (medido: 11 de 21 termos em
+    disputa, zero curados no pool). O prefiltro de facets continua valendo —
+    `type:`/`tag:`/`env:`/`project:` filtram a pista igual filtram o pool."""
+    snippets: dict[int, str] = {}
+    ranked = _fanout(con, cfg, parsed, "curated_fts", pre_sql, pre_params,
+                     _LANE_TOPN, snippets)
+    scores = rrf.fuse(ranked, cfg["rrf_k"])
+    ordem = sorted(scores, key=lambda r: (-scores[r], r))
+    linhas = {row[0]: row for row in _fetch_entries(con, ordem)}
+    extra: list[dict] = []
+    for rowid in ordem:
+        if len(extra) == need:
+            break
+        row = linhas.get(rowid)
+        if row is None or row[1] in ja_no_top:
+            continue
+        card = _card(row, score=round(scores[rowid], 6),
+                     snippet=snippets.get(rowid), via="curated")
+        rowid_of[card["id"]] = rowid
+        extra.append(card)
+    return extra
 
 
 def _apply_shelf(con: sqlite3.Connection, home: NeurataHome,
@@ -189,6 +256,16 @@ def _fetch_entries(con: sqlite3.Connection, rowids: list[int]) -> list:
         "SELECT rowid, id, slug, title, description, type, path"  # nosec B608
         f" FROM entries WHERE rowid IN ({marks})",
         sorted(rowids)).fetchall()
+
+
+def _curados(con: sqlite3.Connection, rowids: list) -> set:
+    """Subconjunto curado de `rowids`, numa query só (não uma por card)."""
+    if not rowids:
+        return set()
+    marks = ",".join("?" * len(rowids))
+    return {r[0] for r in con.execute(  # nosec B608
+        f"SELECT rowid FROM entries WHERE rowid IN ({marks})"
+        " AND regime = 'curated'", rowids)}
 
 
 def _card(row, score, snippet, via) -> dict:
