@@ -51,8 +51,38 @@ jobs:
           name: dist
           path: dist/
 
-  publish:
+  # Última chance antes de um upload irreversível — o PyPI não deixa
+  # republicar uma versão. De propósito sem checkout: sem o repositório em
+  # disco, `import neurata` só pode resolver para o artefato instalado.
+  smoke:
     needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"  # o piso declarado
+      - run: pip install dist/*.whl
+      - name: A CLI publicada funciona
+        env:
+          NEURATA_HOME: ${{ runner.temp }}/nhome
+        run: |
+          python - <<'PY'
+          import neurata
+          assert "site-packages" in neurata.__file__, neurata.__file__
+          import neurata.providers.formats.markdown
+          PY
+          test "$(neurata --version)" = "neurata ${GITHUB_REF_NAME#v}"
+          neurata deposit "smoke pré-publicação" --title "Release" --json
+          neurata tick --json
+          neurata query "smoke" --json
+          neurata doctor --json || test $? -le 1
+
+  publish:
+    needs: smoke
     runs-on: ubuntu-latest
     environment: pypi
     permissions:

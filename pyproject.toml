@@ -13,7 +13,7 @@ dynamic = ["version"]
 dependencies = []
 keywords = ["knowledge-base", "notes", "cli", "agent", "memory", "obsidian"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
@@ -44,8 +44,13 @@ Homepage = "https://github.com/Neguiolidas/Neurata"
 Repository = "https://github.com/Neguiolidas/Neurata"
 Issues = "https://github.com/Neguiolidas/Neurata/issues"
 
-[tool.setuptools]
-packages = ["neurata"]
+# Descoberta automática, não lista fixa. `packages = ["neurata"]` omitia
+# `neurata.providers` e `neurata.providers.formats` do wheel: todo comando
+# morria em `ModuleNotFoundError` porque `cli.py` importa `harvest`, que
+# importa `providers` no topo. A suíte não via nada — CI instala com `-e`,
+# que joga a árvore inteira no sys.path e nunca exercita esta lista.
+[tool.setuptools.packages.find]
+include = ["neurata*"]
 
 [tool.setuptools.dynamic]
 version = { attr = "neurata.__version__" }

@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="docs/assets/neurata-banner.jpg" alt="Neurata — the living memory of your environment: deposit raw, curate quietly, retrieve at the right moment" width="820">
+  <!-- Absolute URL on purpose: PyPI renders this README outside the
+       repository, where a relative path is a broken image at the top
+       of the project page. -->
+  <img src="https://raw.githubusercontent.com/Neguiolidas/Neurata/main/docs/assets/neurata-banner.jpg" alt="Neurata — the living memory of your environment: deposit raw, curate quietly, retrieve at the right moment" width="820">
 </p>
 
 <p align="center">
@@ -18,11 +21,10 @@ tools, docs, decisions — catalogued, curated, retrievable.
 ## Install
 
 ```bash
-pip install neurata
+pip install neurata      # or: pipx install neurata
 ```
 
-*(Once published to PyPI — until then, install editable from a dedicated
-venv:)*
+From source, for hacking on it:
 
 ```bash
 git clone https://github.com/Neguiolidas/Neurata
@@ -53,6 +55,7 @@ neurata expand <id>          # card → summary → full
 
 # archive health
 neurata doctor
+neurata --version
 ```
 
 ## Automatic curation
@@ -72,7 +75,8 @@ neurata doctor
 - Nothing is ever destroyed: archive + quarantine, never delete.
 - Zero runtime dependencies. Python ≥ 3.10.
 
-**Status:** v0.9 — the 1.0 dogfooding gate is cleared (`neurata doctor`
-checks it). Not yet on PyPI.
+**Status:** v1.0.0. The 1.0 gate was dogfooding, not a version number:
+`neurata doctor` measures it, and it cleared at 12 distinct days of real
+use inside a 14-day window.
 
 **License:** AGPL-3.0-or-later.

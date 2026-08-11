@@ -6,5 +6,5 @@ Files are the truth; the index is a disposable cache. Zero runtime
 dependencies. Python >= 3.10.
 """
 
-__version__ = "0.9.0"
+__version__ = "1.0.0"
 __author__ = "Neguiolidas / Neguitech"

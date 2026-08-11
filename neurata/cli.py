@@ -7,6 +7,7 @@ import sys
 import time
 from pathlib import Path
 
+from neurata import __version__
 from neurata.compact import compact
 from neurata.config import ConfigError
 from neurata.config import load as load_config
@@ -56,6 +57,12 @@ def main(argv: "list[str] | None" = None) -> int:
     except UsageError as exc:
         _emit_usage_error(argv, exc)
         return 2
+    # Antes de qualquer toque em disco: é o primeiro comando depois do
+    # `pip install` e o que se pede para reportar bug — precisa responder
+    # com home ausente ou config quebrada.
+    if getattr(args, "version", False):
+        _emit_version(args)
+        return 0
     if not getattr(args, "command", None):
         parser.print_help()
         return 2
@@ -245,6 +252,10 @@ def _build_parser() -> argparse.ArgumentParser:
                     "environment.")
     parser.add_argument("--json", action="store_true",
                         help="saída JSON (contrato versionado)")
+    # store_true em vez de action="version": aquele chama parser.exit(), e
+    # main() devolve int em vez de levantar SystemExit.
+    parser.add_argument("--version", action="store_true",
+                        help="imprime a versão e sai")
     sub = parser.add_subparsers(dest="command")
 
     dep = sub.add_parser("deposit", help="captura crua → inbox")
@@ -339,6 +350,16 @@ def _build_parser() -> argparse.ArgumentParser:
     snp.add_argument("--json", action="store_true",
                      default=argparse.SUPPRESS)
     return parser
+
+
+def _emit_version(args: argparse.Namespace) -> None:
+    if getattr(args, "json", False):
+        print(json.dumps({"contract_version": CONTRACT_VERSION, "ok": True,
+                          "command": "version",
+                          "result": {"version": __version__}},
+                         ensure_ascii=False))
+        return
+    print(f"neurata {__version__}")
 
 
 def _emit(args: argparse.Namespace, result: dict, rc: int = 0) -> None:

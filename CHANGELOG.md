@@ -2,11 +2,17 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 Pre-1.0 versions were an internal dogfooding cycle; spec milestones
-v0.4–v0.7 shipped under the 0.8.0 release.
+v0.4–v0.7 shipped under the 0.8.0 release. None of the 0.x versions was
+ever tagged or uploaded anywhere — they are development history, kept
+for the record. For anyone installing the package, 1.0.0 is the history.
 
-## [Unreleased]
+## [1.0.0] - 2026-08-11
+
+First published release.
 
 ### Added
+- `neurata --version` (and `neurata --json --version`, which reports the
+  version inside the standard envelope).
 - `harvest` accepts arbitrary directories, not just the Claude Code
   skill layout: recursive generic provider (size, symlink, binary and
   permission guards) plus format adapters (`skill-md`, `markdown`,
@@ -33,8 +39,15 @@ v0.4–v0.7 shipped under the 0.8.0 release.
 - `doctor`: `regime` check — fails on a mirrored grain marked as
   refined (curation the next `tick` would overwrite) and on a
   `curated_fts` lane out of sync with `entries`. 16 checks total.
-- Tag-driven release workflow (test → version guard → build → publish
-  over OIDC) and packaging metadata in `pyproject.toml`.
+- Tag-driven release workflow (test → version guard → build → smoke →
+  publish over OIDC) and packaging metadata in `pyproject.toml`. The
+  smoke job installs the built wheel on a runner that never checks the
+  repository out, so `import neurata` can only resolve to the artifact:
+  nothing reaches PyPI without having run as an installed package. A
+  PyPI upload cannot be taken back or replaced, so this is the last
+  place a broken build can still be stopped.
+- CI: `wheel` job — builds, runs `twine check`, installs the wheel
+  without `-e` and exercises the CLI outside the repository.
 
 ### Changed
 - `INDEX_SCHEMA_VERSION` 6 → 7. The index rebuilds itself on the next
@@ -42,8 +55,19 @@ v0.4–v0.7 shipped under the 0.8.0 release.
 - `compact` is monotonic: it refuses to demote a grain that is already
   refined, so re-running the Miner over a compacted archive can no
   longer trade a summary back for a raw body.
+- Trove classifier `Development Status` 4 - Beta → 5 -
+  Production/Stable.
 
 ### Fixed
+- Packaging: the wheel shipped without `neurata.providers` and
+  `neurata.providers.formats`, because `[tool.setuptools]` listed
+  `packages = ["neurata"]` and subpackages are not implied. Every
+  command died on `ModuleNotFoundError` — `cli` imports `harvest`, which
+  imports `providers` at module level — so an install from the artifact
+  could not even print `--version`. The whole test suite stayed green
+  throughout: CI installed with `pip install -e .`, which puts the
+  source tree on `sys.path` and never consults that list. Replaced by
+  automatic discovery (`[tool.setuptools.packages.find]`).
 - Morphology was rewriting the whole query instead of expanding terms:
   `notas de datapipe` also ran as `nota de datapipe`, a reading that
   competed with the real one and pushed legitimate documents off the
