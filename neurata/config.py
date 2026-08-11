@@ -11,8 +11,7 @@ from neurata.home import NeurataHome
 
 DEFAULTS: dict = {
     "bm25_weights": {"title": 4.0, "aliases": 3.0, "tags": 2.0, "body": 1.0},
-    "variant_weights": {"raw": 1.0, "norm": 0.8, "singular": 0.6,
-                        "plural": 0.6, "prefix": 0.5},
+    "variant_weights": {"raw": 1.0, "norm": 0.8, "prefix": 0.5},
     "rrf_k": 60,
     "w_ppr": 0.3,
     "skill_boost": 1.5,

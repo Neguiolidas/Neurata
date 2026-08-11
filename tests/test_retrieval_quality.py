@@ -126,16 +126,18 @@ def test_controle_negativo_nao_casa(home, qstr):
         f"ou termo comum está casando sozinho")
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFEITO ABERTO: fts5 unicode61 não tem stoplist, então 'de' casa o "
-    "corpus inteiro e a fusão por rank trata esse match como voto igual ao "
-    "do termo raro. Hoje 'notas de datapipe' devolve notas-de-reuniao-julho em "
-    "1 e obsidian-vault-layout em 2 — dois documentos sem nenhuma relação "
-    "com datapipe — empurrando o match exato pra 3. Correção: stoplist pt/en "
-    "ou peso por IDF na fusão."))
 def test_stopword_nao_domina_termo_raro(home):
     """Preposição não pode superar termo raro. Query mista tem que rankear
-    pelo termo que discrimina, não pelo que casa tudo."""
+    pelo termo que discrimina, não pelo que casa tudo.
+
+    Foi defeito aberto, e a causa que estava escrita aqui — "'de' casa o
+    corpus inteiro e a fusão trata como voto igual" — era falsa: medido,
+    'de' tem df=16 e IDF zerado, e o documento certo era rank 1 em raw,
+    norm, singular e prefix. Quem elegia o ruído era a variante `plural`,
+    `("notas" OR "des" OR "datapipes")`: nenhuma flexão existia no corpus,
+    a lista degenerava em "quem casa notas" e dava voto de rank 1 no RRF a
+    um documento que ficava em 3 em toda variante fiel. Corrigido movendo a
+    morfologia para dentro da variante `norm` (ver `router.variants`)."""
     slugs = _slugs(home, "notas de datapipe")
     assert slugs[:1] == ["datapipe-0-10-0-update"], (
         f"stopword dominou o termo raro: {slugs[:3]}")
@@ -145,16 +147,17 @@ def test_stopword_nao_domina_termo_raro(home):
 _COM_DATAPIPE = {"datapipe-0-10-0-update", "datapipe-proxy-systemd"}
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "DEFEITO ABERTO: unicode61 corta em não-alfanumérico, então '0.10' vira "
-    "os tokens '0' e '10', que casam qualquer documento com dígito. Hoje "
-    "'datapipe 0.10' admite ecc-integration-v3, que não fala de "
-    "datapipe. Aqui o rank 1 aguenta porque o corpus tem 16 documentos; num "
-    "arquivo de centenas o ruído sobe. Correção: preservar versão como "
-    "token único (tokenizer ou normalização na indexação)."))
 def test_versao_com_ponto_nao_admite_ruido(home):
     """Somar um número de versão a um termo raro pode reordenar, mas não
-    pode ADMITIR documento que não contém o termo raro."""
+    pode ADMITIR documento que não contém o termo raro.
+
+    Foi defeito aberto, e a causa que estava escrita aqui — "unicode61 corta
+    em não-alfanumérico" — culpava o índice por um bug da query: `"0.10"`
+    entre aspas já é FRASE em FTS5 (`0` seguido de `10`), casa `0.10.0` e
+    rejeita `3.0`, e a variante `raw` sempre acertou. Quem admitia ruído era
+    `norm`, que fazia `normalize(tok).split()` e transformava um termo do
+    usuário em dois termos OR'd. Corrigido mantendo o token normalizado como
+    termo único; o tokenizer nunca precisou mudar."""
     intrusos = set(_slugs(home, "datapipe 0.10")) - _COM_DATAPIPE
     assert intrusos == set(), f"versão fragmentada admitiu ruído: {intrusos}"
 

@@ -43,10 +43,19 @@ def test_variants_raw_first_and_column_sets():
     assert '"compactacao"' in norm.match
 
 
-def test_variants_dedupe():
-    names = [v.name for v in variants(parse("casa"))]
-    assert "singular" not in names  # idêntica à norm ("casa" sem s final)
-    assert "plural" in names and "prefix" in names
+def test_morfologia_mora_dentro_da_variante_norm():
+    """Flexão é expansão de termo, não lista própria: sem lista degenerada."""
+    vs = variants(parse("casa"))
+    assert [v.name for v in vs] == ["raw", "norm", "prefix"]
+    norm = next(v for v in vs if v.name == "norm")
+    assert '"casa"' in norm.match and '"casas"' in norm.match
+
+
+def test_token_normalizado_multipalavra_vira_frase_unica():
+    """`0.10` não pode virar `0` OR `10` — casaria qualquer `3.0`."""
+    norm = next(v for v in variants(parse("0.10")) if v.name == "norm")
+    assert '"0 10"' in norm.match
+    assert '"0" OR "10"' not in norm.match
 
 
 def test_prefix_variant_star():

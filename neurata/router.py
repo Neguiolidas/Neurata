@@ -19,7 +19,7 @@ _NORM_COLS = "{title_norm aliases_norm tags_norm body_norm}"
 
 @dataclass
 class Variant:
-    name: str    # raw | norm | singular | plural | prefix (= chave de peso)
+    name: str    # raw | norm | prefix (= chave de peso)
     match: str   # string MATCH FTS5 pronta (sanitizada)
 
 
@@ -63,29 +63,43 @@ def parse(q: str) -> ParsedQuery:
     return ParsedQuery(q, tokens, phrases, facets, tags, skill)
 
 
+def _formas(norm_t: list[str]) -> list[str]:
+    """Cada token mais sua variação de número, na ordem, sem repetir.
+
+    Token multi-palavra é identificador quebrado (`HTTPServer` → `http
+    server`) e casa como frase: flexionar a frase inteira não teria sentido.
+    """
+    out: list[str] = []
+    for n in norm_t:
+        out.append(n)
+        if " " not in n:
+            out.append(n[:-1] if n.endswith("s") and len(n) > 3 else n + "s")
+    return list(dict.fromkeys(out))
+
+
 def variants(parsed: ParsedQuery) -> list[Variant]:
-    """≤5 variantes, deduplicadas. raw primeiro (preferência de snippet)."""
+    """1 a 3 variantes; raw primeiro (preferência de snippet).
+
+    Morfologia é expansão de TERMO, não leitura alternativa da query inteira:
+    as formas entram na MESMA lista e o BM25 arbitra. Uma lista por leitura
+    morfológica degenerava — a forma que não casa nada (`datapipes`) some do
+    MATCH, a lista vira "quem casa o resto" e dá voto de rank 1 no RRF a um
+    documento que o termo raro não elegeria.
+    """
     if not parsed.has_text:
         return []
     out = [Variant("raw", _match(_RAW_COLS, parsed.tokens, parsed.phrases))]
-    norm_t = [t for tok in parsed.tokens for t in normalize(tok).split()]
+    # normalize() pode devolver várias palavras, mas o token do usuário segue
+    # sendo UM termo (frase FTS5) — nunca N termos OR'd, senão "0.10" vira
+    # "0" OR "10" e passa a casar qualquer "3.0".
+    norm_t = [n for tok in parsed.tokens if (n := normalize(tok))]
     norm_p = [np for p in parsed.phrases if (np := normalize(p))]
     if not (norm_t or norm_p):
         return out
-    base = _match(_NORM_COLS, norm_t, norm_p)
-    out.append(Variant("norm", base))
-    seen = {base}
-    sing = [t[:-1] if t.endswith("s") and len(t) > 3 else t for t in norm_t]
-    plur = [t if t.endswith("s") else t + "s" for t in norm_t]
-    for name, toks in (("singular", sing), ("plural", plur)):
-        m = _match(_NORM_COLS, toks, norm_p)
-        if m not in seen:
-            out.append(Variant(name, m))
-            seen.add(m)
+    out.append(Variant("norm", _match(_NORM_COLS, _formas(norm_t), norm_p)))
     if norm_t:
-        m = _match(_NORM_COLS, norm_t, norm_p, prefix_last=True)
-        if m not in seen:
-            out.append(Variant("prefix", m))
+        out.append(Variant(
+            "prefix", _match(_NORM_COLS, norm_t, norm_p, prefix_last=True)))
     return out
 
 
