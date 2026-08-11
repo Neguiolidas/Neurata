@@ -263,9 +263,9 @@ def _curados(con: sqlite3.Connection, rowids: list) -> set:
     if not rowids:
         return set()
     marks = ",".join("?" * len(rowids))
-    return {r[0] for r in con.execute(  # nosec B608
-        f"SELECT rowid FROM entries WHERE rowid IN ({marks})"
-        " AND regime = 'curated'", rowids)}
+    sql = (f"SELECT rowid FROM entries WHERE rowid IN ({marks})"  # nosec B608
+           " AND regime = 'curated'")
+    return {r[0] for r in con.execute(sql, rowids)}
 
 
 def _card(row, score, snippet, via) -> dict:
