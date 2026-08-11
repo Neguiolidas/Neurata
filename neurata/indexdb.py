@@ -203,6 +203,21 @@ def create_schema(con: sqlite3.Connection) -> None:
     con.commit()
 
 
+def schema_state(con: sqlite3.Connection) -> str:
+    """Classifica o carimbo de versão do índice, sem julgar: `"current"`,
+    `"unstamped"` (nunca reindexado) ou `"mismatch"` (schema antigo).
+
+    Separar a leitura do veredito é o que deixa cada chamador decidir
+    sozinho: `check_schema` transforma em erro, `query` cura o caso
+    `unstamped` reindexando. SELECT puro no meta, zero efeito colateral.
+    """
+    row = con.execute(
+        "SELECT value FROM meta WHERE key='index_schema_version'").fetchone()
+    if row is None:
+        return "unstamped"
+    return "current" if str(row[0]) == str(INDEX_SCHEMA_VERSION) else "mismatch"
+
+
 def check_schema(con: sqlite3.Connection,
                  require_reindexed: bool = True) -> None:
     """Levanta se o índice está em versão != atual (schema corrompido/
@@ -219,17 +234,13 @@ def check_schema(con: sqlite3.Connection,
     do run, antes de rodar near-dup contra um índice sem coluna
     `shingles` (v4).
     """
-    row = con.execute(
-        "SELECT value FROM meta WHERE key='index_schema_version'").fetchone()
-    if row is None:
-        if require_reindexed:
-            raise IndexSchemaError(
-                "índice ausente ou em schema antigo — rode "
-                "`neurata reindex`")
+    state = schema_state(con)
+    if state == "current":
         return
-    if str(row[0]) != str(INDEX_SCHEMA_VERSION):
-        raise IndexSchemaError(
-            "índice ausente ou em schema antigo — rode `neurata reindex`")
+    if state == "unstamped" and not require_reindexed:
+        return
+    raise IndexSchemaError(
+        "índice ausente ou em schema antigo — rode `neurata reindex`")
 
 
 def load_shingle_sets(con: sqlite3.Connection) -> "dict[str, frozenset]":

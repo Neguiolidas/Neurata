@@ -143,13 +143,34 @@ def test_query_json_roundtrip(tmp_path, monkeypatch, capsys):
     assert out["result"]["results"][0]["via"] == "lexical"
 
 
-def test_query_before_reindex_remediation(tmp_path, monkeypatch, capsys):
+def test_query_on_virgin_home_returns_empty_not_error(
+        tmp_path, monkeypatch, capsys):
+    """NEURATA_HOME sem nenhum `.md`: zero resultados é a resposta certa.
+
+    Substitui o contrato antigo (rc 2 + "rode `neurata reindex`"), que
+    tratava disco vazio e disco não indexado como o mesmo estado.
+    """
     monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
     rc = main(["query", "x", "--json"])
-    assert rc == 2
+    assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["ok"] is False
-    assert "reindex" in out["error"]["message"]
+    assert out["ok"] is True
+    assert out["result"]["results"] == []
+
+
+def test_query_selfheals_after_deposit_without_reindex(
+        tmp_path, monkeypatch, capsys):
+    """End-to-end do bug reportado: depositar e buscar, sem `reindex`."""
+    monkeypatch.setenv("NEURATA_HOME", str(tmp_path))
+    assert main(["deposit", "Motor Xenolítico\n\nSobre criptofauna abissal.",
+                 "--json"]) == 0
+    capsys.readouterr()
+
+    rc = main(["query", "criptofauna", "--json"])
+
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert len(out["result"]["results"]) == 1
 
 
 def test_bad_args_emit_json_envelope(tmp_path, monkeypatch, capsys):

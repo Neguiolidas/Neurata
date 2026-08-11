@@ -104,12 +104,6 @@ def test_symbols_only_error(tmp_path):
         query(_setup(tmp_path), "*** !!!")
 
 
-def test_schema_mismatch_remediation(tmp_path):
-    home = _home(tmp_path)  # nunca reindexado
-    with pytest.raises(QueryError, match="reindex"):
-        query(home, "x")
-
-
 def test_acronym_split_findable_by_parts(tmp_path):
     """T4: termo com acrônimo/camelCase (ex. JSONParserUtil) é indexado
     com dupla tokenização (token completo + partes split), igual ao

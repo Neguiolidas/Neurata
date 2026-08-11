@@ -12,7 +12,16 @@ Ao mexer nestas queries, manter a invariante ou remover o `nosec`.
 """
 import sqlite3
 
-from neurata import config, indexdb, linkgraph, router, rrf, shelf, usage
+from neurata import (
+    config,
+    indexdb,
+    linkgraph,
+    reindex,
+    router,
+    rrf,
+    shelf,
+    usage,
+)
 from neurata.home import NeurataHome
 from neurata.indexdb import connect
 
@@ -34,6 +43,7 @@ def query(home: NeurataHome, qstr: str, limit: int = 10) -> dict:
         raise QueryError(
             "query vazia — passe texto e/ou facets "
             "(type:/tag:/env:/project:/regime:)")
+    _ensure_searchable(home)
     con = connect(home)
     try:
         _check_schema(con)
@@ -51,11 +61,57 @@ def query(home: NeurataHome, qstr: str, limit: int = 10) -> dict:
     return {"results": results}
 
 
+def _has_indexable_content(home: NeurataHome) -> bool:
+    """Há `.md` nos mesmos diretórios que o `reindex` varre?
+
+    Deliberadamente espelha o loop de `reindex._reindex_locked`. As duas
+    varreduras precisam concordar: se esta disser "nada" e a do reindex
+    achar algo, `query` devolve vazio tendo conteúdo — a mentira que o
+    guard existia pra impedir.
+    """
+    return any(next(base.rglob("*.md"), None) is not None
+               for base in (home.library, home.inbox))
+
+
+def _ensure_searchable(home: NeurataHome) -> None:
+    """Cura o índice nunca reindexado, em vez de mandar o usuário rodar
+    `neurata reindex`.
+
+    O guard antigo recusava buscar sem carimbo de versão porque índice
+    vazio seria "indistinguível" de haver arquivos nunca indexados. É
+    distinguível: basta olhar o disco. Disco vazio → zero resultados é a
+    verdade, não um erro. Disco com conteúdo → reindexa aqui e responde.
+
+    Só o estado `unstamped` é curado. `mismatch` (schema realmente
+    antigo) continua sendo erro explícito de `_check_schema`: migrar
+    schema é decisão do usuário, não efeito colateral de uma busca.
+    """
+    con = connect(home)
+    try:
+        if indexdb.schema_state(con) != "unstamped":
+            return
+    finally:
+        con.close()
+    if not _has_indexable_content(home):
+        return
+    try:
+        reindex.reindex(home)
+    except indexdb.LockHeldError as exc:
+        raise QueryError(
+            "há conteúdo não indexado e o índice está travado por outro "
+            "processo — repita depois ou rode `neurata reindex`") from exc
+
+
 def _check_schema(con: sqlite3.Connection) -> None:
     """Delegação pro `indexdb.check_schema` público (Task 2) — mesma
-    checagem, API do query intacta (QueryError, não IndexSchemaError)."""
+    checagem, API do query intacta (QueryError, não IndexSchemaError).
+
+    `require_reindexed=False` porque `_ensure_searchable` já rodou: um
+    índice sem carimbo aqui é um NEURATA_HOME comprovadamente sem `.md`
+    no disco, e buscar nele devolve [] legitimamente.
+    """
     try:
-        indexdb.check_schema(con)
+        indexdb.check_schema(con, require_reindexed=False)
     except indexdb.IndexSchemaError as exc:
         raise QueryError(str(exc)) from exc
 
