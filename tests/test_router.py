@@ -73,3 +73,9 @@ def test_phrase_survives_normalization_as_phrase():
     vs = variants(parse('"Motor Híbrido"'))
     norm = next(v for v in vs if v.name == "norm")
     assert '"motor hibrido"' in norm.match
+
+
+def test_facet_regime_e_extraida():
+    parsed = parse("regime:curated token")
+    assert parsed.facets["regime"] == "curated"
+    assert parsed.tokens == ["token"]  # faceta sai do texto de busca

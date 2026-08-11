@@ -32,7 +32,7 @@ def query(home: NeurataHome, qstr: str, limit: int = 10) -> dict:
     if not parsed.has_text and not parsed.has_facets:
         raise QueryError(
             "query vazia — passe texto e/ou facets "
-            "(type:/tag:/env:/project:)")
+            "(type:/tag:/env:/project:/regime:)")
     con = connect(home)
     try:
         _check_schema(con)
@@ -62,7 +62,7 @@ def _check_schema(con: sqlite3.Connection) -> None:
 def _prefilter(parsed: router.ParsedQuery) -> "tuple[str | None, list]":
     clauses: list[str] = []
     params: list = []
-    for key in ("type", "env", "project"):
+    for key in ("type", "env", "project", "regime"):
         if key in parsed.facets:
             clauses.append(f"e.{key} = ?")
             params.append(parsed.facets[key])

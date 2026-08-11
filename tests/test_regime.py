@@ -84,3 +84,24 @@ def test_pista_nao_deixa_orfao_quando_o_grao_some(tmp_path):
     reindex(home)
     assert _pista(home) == _curados(home)
     assert len(_pista(home)) == 1
+
+
+def test_faceta_regime_filtra_busca(tmp_path):
+    from neurata.query import query
+    home = NeurataHome(tmp_path)
+    home.init()
+    _grao(home, "espelhado", {"source_key": "skill:alfa",
+                              "source_path": "alfa/SKILL.md"},
+          body="token de sessao no espelho")
+    _grao(home, "curado", {}, body="token de sessao no curado")
+    reindex(home)
+
+    assert [c["slug"] for c in query(home, "regime:curated token")["results"]] \
+        == ["curado"]
+    assert [c["slug"] for c in query(home, "regime:mirror token")["results"]] \
+        == ["espelhado"]
+    # Faceta sem texto: listagem, mesmo padrão de type:/env:.
+    assert [c["slug"] for c in query(home, "regime:mirror")["results"]] \
+        == ["espelhado"]
+    # Valor inválido não explode: filtra tudo, mesma semântica de type:xyz.
+    assert query(home, "regime:xyz token")["results"] == []

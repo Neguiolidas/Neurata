@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 from neurata.textnorm import normalize
 
-_FACET = re.compile(r"(?:^|(?<=\s))(type|tag|env|project):(\S+)")
+_FACET = re.compile(r"(?:^|(?<=\s))(type|tag|env|project|regime):(\S+)")
 _PHRASE = re.compile(r'"([^"]+)"')
 _SKILL = re.compile(r"\bcomo fa[çc]o\b|\bhow do i\b", re.IGNORECASE)
 _WORD = re.compile(r"\w")
@@ -28,7 +28,7 @@ class ParsedQuery:
     text: str
     tokens: list[str]
     phrases: list[str]
-    facets: dict[str, str]  # type/env/project
+    facets: dict[str, str]  # type/env/project/regime
     tags: list[str]
     skill_hint: bool
 
