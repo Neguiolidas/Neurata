@@ -4,6 +4,7 @@ import os
 import sqlite3
 
 from neurata.home import NeurataHome
+from neurata.textnorm import normalize
 
 _REMEDY = (
     "FTS5 indisponível no sqlite deste Python. O Neurata exige FTS5 "
@@ -73,6 +74,49 @@ _FTS = ("CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5("
         "title, aliases, tags, body, "
         "title_norm, aliases_norm, tags_norm, body_norm, "
         "prefix='2 3 4')")
+
+# Pista do regime curado: mesmo texto, mesmo rowid, corpus pequeno. Existe
+# por medição, não por elegância — filtrar `entries_fts` por regime custa
+# 100-250 ms num corpus de 15k (o espelho domina a lista de postings do
+# termo); a pista responde em 0,3 ms porque o corpus dela são só os grãos
+# deliberados. Índice é cache descartável: o custo de duplicar o texto
+# curado (1,3 MiB em 106 grãos) é 0,5% do índice.
+_CURATED_FTS = ("CREATE VIRTUAL TABLE IF NOT EXISTS curated_fts USING fts5("
+                "title, aliases, tags, body, "
+                "title_norm, aliases_norm, tags_norm, body_norm, "
+                "prefix='2 3 4')")
+
+
+def fts_insert(con: sqlite3.Connection, rowid: int, regime: str, *,
+               title: str, aliases: str, tags: str, body: str) -> None:
+    """Indexa o texto do grão: sempre no FTS principal, e na pista se curado.
+
+    Ponto único de escrita de texto no índice. A normalização mora aqui de
+    propósito: estava duplicada nos dois writers, que é como dois caminhos
+    divergem sem ninguém perceber."""
+    cols = (rowid, title, aliases, tags, body,
+            normalize(title), normalize(aliases), normalize(tags),
+            normalize(body))
+    tables = ("entries_fts", "curated_fts") if regime == "curated" \
+        else ("entries_fts",)
+    for table in tables:
+        con.execute(
+            f"INSERT INTO {table}(rowid, title, aliases, tags, body,"  # nosec B608
+            " title_norm, aliases_norm, tags_norm, body_norm)"
+            " VALUES (?,?,?,?,?,?,?,?,?)", cols)
+
+
+def entry_purge(con: sqlite3.Connection, rowid: int, entry_id: str) -> None:
+    """Remove o grão de TODAS as tabelas do índice.
+
+    Ponto único de remoção. `curated_fts` sem a linha é no-op, então não
+    precisa checar regime. Sem isto seriam quatro DELETEs copiados em três
+    pontos do `tick`, e o esquecido viraria grão fantasma: some da
+    biblioteca, continua respondendo na busca."""
+    con.execute("DELETE FROM entries_fts WHERE rowid=?", (rowid,))
+    con.execute("DELETE FROM curated_fts WHERE rowid=?", (rowid,))
+    con.execute("DELETE FROM entry_tags WHERE entry_rowid=?", (rowid,))
+    con.execute("DELETE FROM entries WHERE id=?", (entry_id,))
 
 
 def regime_of(meta: dict) -> str:
@@ -152,6 +196,7 @@ def entries_columns(con: sqlite3.Connection) -> set:
 def create_schema(con: sqlite3.Connection) -> None:
     con.executescript(_SCHEMA)
     con.execute(_FTS)
+    con.execute(_CURATED_FTS)
     if "regime" in entries_columns(con):
         for ddl in _ENTRIES_INDEXES:
             con.execute(ddl)
@@ -194,6 +239,7 @@ def load_shingle_sets(con: sqlite3.Connection) -> "dict[str, frozenset]":
 
 
 def drop_schema(con: sqlite3.Connection) -> None:
+    con.execute("DROP TABLE IF EXISTS curated_fts")
     con.execute("DROP TABLE IF EXISTS entries_fts")
     con.execute("DROP TABLE IF EXISTS grains")
     con.execute("DROP TABLE IF EXISTS edges")

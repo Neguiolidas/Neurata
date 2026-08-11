@@ -28,9 +28,9 @@ from neurata.indexdb import (
     connect,
     create_schema,
     drop_schema,
+    fts_insert,
     regime_of,
 )
-from neurata.textnorm import normalize
 
 _WIKILINK = re.compile(r"\[\[([^\[\]]+)\]\]")
 _AMBIG = -1  # sentinela: título/alias casando 2+ entries
@@ -205,12 +205,8 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
          regime_of(meta)))
     rowid = cur.lastrowid
     assert rowid is not None  # INSERT sempre popula lastrowid
-    con.execute(
-        "INSERT INTO entries_fts(rowid, title, aliases, tags, body,"
-        " title_norm, aliases_norm, tags_norm, body_norm)"
-        " VALUES (?,?,?,?,?,?,?,?,?)",
-        (rowid, title, aliases_text, tags_text, fts_body, normalize(title),
-         normalize(aliases_text), normalize(tags_text), normalize(fts_body)))
+    fts_insert(con, rowid, regime_of(meta), title=title, aliases=aliases_text,
+               tags=tags_text, body=fts_body)
     for tag in {t.lower() for t in tag_list}:
         con.execute("INSERT OR IGNORE INTO entry_tags VALUES (?,?)",
                     (rowid, tag))

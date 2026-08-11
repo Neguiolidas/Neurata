@@ -42,3 +42,45 @@ def test_regime_espelha_dialeto_do_frontmatter(tmp_path):
 
     assert indexado == esperado
     assert set(esperado.values()) == {"mirror", "curated"}  # sanidade
+
+
+def _pista(home):
+    con = sqlite3.connect(home.index_path)
+    try:
+        return {r[0] for r in con.execute("SELECT rowid FROM curated_fts")}
+    finally:
+        con.close()
+
+
+def _curados(home):
+    con = sqlite3.connect(home.index_path)
+    try:
+        return {r[0] for r in con.execute(
+            "SELECT rowid FROM entries WHERE regime='curated'")}
+    finally:
+        con.close()
+
+
+def test_pista_curada_tem_exatamente_os_curados(tmp_path):
+    home = NeurataHome(tmp_path)
+    home.init()
+    _grao(home, "espelhado", {"source_key": "skill:alfa",
+                              "source_path": "alfa/SKILL.md"})
+    _grao(home, "curado-a", {})
+    _grao(home, "curado-b", {})
+    reindex(home)
+    assert _pista(home) == _curados(home)
+    assert len(_pista(home)) == 2
+
+
+def test_pista_nao_deixa_orfao_quando_o_grao_some(tmp_path):
+    """Grão apagado da biblioteca não pode sobreviver na pista."""
+    home = NeurataHome(tmp_path)
+    home.init()
+    _grao(home, "curado-a", {})
+    _grao(home, "curado-b", {})
+    reindex(home)
+    (home.library / "curado-b.md").unlink()
+    reindex(home)
+    assert _pista(home) == _curados(home)
+    assert len(_pista(home)) == 1

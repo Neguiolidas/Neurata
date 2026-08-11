@@ -22,9 +22,15 @@ from neurata import indexdb
 from neurata.dedup import NEAR_DUP_JACCARD, jaccard, shingle_hashes
 from neurata.frontmatter import FrontmatterError, parse, serialize
 from neurata.home import NeurataHome
-from neurata.indexdb import IndexLock, connect, regime_of
+from neurata.indexdb import (
+    IndexLock,
+    connect,
+    entry_purge,
+    fts_insert,
+    regime_of,
+)
 from neurata.snapshot import commit_tick, ensure_repo
-from neurata.textnorm import normalize, slugify
+from neurata.textnorm import slugify
 from neurata.ulid import new_ulid
 
 
@@ -339,10 +345,7 @@ def _index_delete(con, entry_id: str) -> None:
         "SELECT rowid FROM entries WHERE id=?", (entry_id,)).fetchone()
     if row is None:
         return
-    rowid = row[0]
-    con.execute("DELETE FROM entries_fts WHERE rowid=?", (rowid,))
-    con.execute("DELETE FROM entry_tags WHERE entry_rowid=?", (rowid,))
-    con.execute("DELETE FROM entries WHERE id=?", (entry_id,))
+    entry_purge(con, row[0], entry_id)
 
 
 def _process_tombstone(home: NeurataHome, con, tick_id: str, path: Path,
@@ -549,9 +552,7 @@ def _reconcile_renames(home: NeurataHome, con, tick_id: str,
     for rowid, eid, old_path, _chash in missing:
         if eid in handled:
             continue
-        con.execute("DELETE FROM entries_fts WHERE rowid=?", (rowid,))
-        con.execute("DELETE FROM entry_tags WHERE entry_rowid=?", (rowid,))
-        con.execute("DELETE FROM entries WHERE id=?", (eid,))
+        entry_purge(con, rowid, eid)
         con.commit()
         reason = ("entrada morta no índice removida — arquivo ausente e "
                   "sem par por content_hash; busque em quarantine/journal")
@@ -648,9 +649,7 @@ def _reconcile_journal_orphans(home: NeurataHome, con, tick_id: str,
                 report.reconciled += 1
                 report.processed += 1
         else:
-            con.execute("DELETE FROM entries_fts WHERE rowid=?", (rowid,))
-            con.execute("DELETE FROM entry_tags WHERE entry_rowid=?", (rowid,))
-            con.execute("DELETE FROM entries WHERE id=?", (eid,))
+            entry_purge(con, rowid, eid)
             con.commit()
             reason = ("orfao write-then-log inconsistente (id/content_hash"
                       " nao batem com o indice) — quarentena por seguranca,"
@@ -698,12 +697,8 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
          regime_of(meta)))
     rowid = cur.lastrowid
     assert rowid is not None
-    con.execute(
-        "INSERT INTO entries_fts(rowid, title, aliases, tags, body,"
-        " title_norm, aliases_norm, tags_norm, body_norm)"
-        " VALUES (?,?,?,?,?,?,?,?,?)",
-        (rowid, title, aliases_text, tags_text, fts_body, normalize(title),
-         normalize(aliases_text), normalize(tags_text), normalize(fts_body)))
+    fts_insert(con, rowid, regime_of(meta), title=title, aliases=aliases_text,
+               tags=tags_text, body=fts_body)
     for tag in {t.lower() for t in tag_list}:
         con.execute("INSERT OR IGNORE INTO entry_tags VALUES (?,?)",
                    (rowid, tag))
