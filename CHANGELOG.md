@@ -19,7 +19,7 @@ v0.4–v0.7 shipped under the 0.8.0 release.
   stop colliding. The harvested root may never contain `NEURATA_HOME`.
 - `doctor`: `gate` check — the 1.0 dogfooding gate (10 real days of
   use inside a 14-day window).
-- Two-regime library. Both regimes live in `Library/`; what tells them
+- Two-regime library. Both regimes live in `library/`; what tells them
   apart is `source_key`, which only `tick` writes when it mirrors an
   external source. `regime` is derived from its presence (`mirror` when
   set, `curated` otherwise) and is never a field anyone authors, so the
