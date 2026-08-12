@@ -6,6 +6,65 @@ v0.4–v0.7 shipped under the 0.8.0 release. None of the 0.x versions was
 ever tagged or uploaded anywhere — they are development history, kept
 for the record. For anyone installing the package, 1.0.0 is the history.
 
+## [1.1.0] - 2026-08-12
+
+Provenance becomes searchable: who deposited a grain, in which session,
+from where — and which grains still answer none of that.
+
+### Added
+- Provenance facets `agent:`, `session:` and `origin:` —
+  `neurata query "term agent:hermes"`. Provenance is read from each
+  grain's frontmatter and stored in three real columns, so the facet
+  filters instead of guessing.
+- `missing:<facet>` — the inverse question: which curated grains still
+  have no provenance (`neurata query "missing:agent"`). Valid keys are
+  the three provenance facets; anything else (`missing:xpto`) and
+  `missing:… regime:mirror` are usage errors with a message, not empty
+  lists — `[]` there would claim "no gaps" where everything is a gap.
+
+### Changed
+- **Behaviour change:** `agent:`, `session:` and `origin:` used to fall
+  through to free text, so `agent:hermes` matched any grain that merely
+  mentioned either word. They now filter. Saved queries that relied on
+  the old fan-out return fewer (and different) results.
+- Provenance facets only ever match curated grains. A mirror carries the
+  frontmatter of the source it reflects, not a depositor, so its three
+  columns are NULL by construction — and `missing:` says so explicitly
+  instead of drowning the real gaps in the whole mirror.
+- Index schema v8: three provenance columns on `entries`. An index
+  written by 1.0.0 migrates in place on the next command — `ALTER TABLE`
+  plus a backfill that re-reads each curated grain's frontmatter, under
+  the index lock and in one transaction, so a failure halfway leaves the
+  index exactly as it was, still stamped v7. No reindex, no journal loss:
+  23 ms over an index of ~15 k grains here.
+
+### Fixed
+- `query` on a `NEURATA_HOME` that had never been reindexed refused to
+  search ("index missing or on an old schema — run `neurata reindex`")
+  even when nothing was wrong. It was the first command a new user ran
+  after `deposit`, and it was a wall. An unstamped index with `.md` files
+  on disk is now rebuilt on the spot; an unstamped index with an empty
+  disk returns zero results, which is the truth. A genuine schema
+  mismatch still errors out: migrating is the user's decision, not the
+  side effect of a search.
+
+### Upgrade note
+Point every consumer of the same `NEURATA_HOME` at 1.1.0 together. The
+migration is one-way in practice: 1.0.0 does not know the new columns,
+so any `reindex` it runs rebuilds the index at v7 and drops them, and
+the next 1.1.0 command migrates it back. Nothing is lost — provenance is
+re-derived from the files — but the round trip costs a full reindex
+(43 s for ~15 k grains here) against 23 ms for the migration.
+
+### Known limitations
+- Facet values are matched literally, case included: `agent:hermes` and
+  `agent:Hermes` are different values (36 results against 0 in the
+  archive this was measured on).
+- A facet value cannot contain spaces, and quoting does not help:
+  `agent:"claude code"` drops the facet and searches for the text
+  `agent:` instead. Both limitations predate 1.1.0 and apply to every
+  facet, provenance or not.
+
 ## [1.0.0] - 2026-08-11
 
 First published release.

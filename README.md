@@ -78,7 +78,7 @@ neurata --version
 - Nothing is ever destroyed: archive + quarantine, never delete.
 - Zero runtime dependencies. Python ≥ 3.10.
 
-**Status:** v1.0.0. The 1.0 gate was dogfooding, not a version number:
+**Status:** v1.1.0. The 1.0 gate was dogfooding, not a version number:
 `neurata doctor` measures it, and it cleared at 12 distinct days of real
 use inside a 14-day window.
 
