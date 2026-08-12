@@ -39,10 +39,13 @@ class QueryError(ValueError):
 def query(home: NeurataHome, qstr: str, limit: int = 10) -> dict:
     cfg = config.load(home)
     parsed = router.parse(qstr)
+    # antes do check de vazia: `missing:xpto` sozinho tem has_facets e
+    # cairia em "query vazia", escondendo o erro que o usuário precisa ver.
+    _validate_missing(parsed)
     if not parsed.has_text and not parsed.has_facets:
         raise QueryError(
-            "query vazia — passe texto e/ou facets "
-            "(type:/tag:/env:/project:/regime:)")
+            "query vazia — passe texto e/ou facets (type:/tag:/env:/"
+            "project:/regime:/agent:/session:/origin:/missing:)")
     _ensure_searchable(home)
     con = connect(home)
     try:
@@ -136,13 +139,46 @@ def _check_schema(con: sqlite3.Connection) -> None:
         raise QueryError(str(exc)) from exc
 
 
+# Fragmento pronto por coluna: nada que o usuário digitou chega ao SQL,
+# nem por engano futuro. `regime = 'curated'` explícito porque o espelho é
+# NULL nas três por construção e afogaria toda lacuna de verdade.
+_MISSING_CLAUSE = {
+    col: f"(e.{col} IS NULL AND e.regime = 'curated')"
+    for col in indexdb.PROVENANCE_COLS
+}
+
+
+def _validate_missing(parsed: router.ParsedQuery) -> None:
+    """`missing:` só faz sentido sobre as colunas de procedência do curado.
+
+    Chave desconhecida e `regime:mirror` são erros de uso, não listas
+    vazias: espelho é NULL nas três por construção, e devolver [] ali
+    diria ao usuário "não há lacunas" quando são todas lacuna.
+    """
+    if not parsed.missing:
+        return
+    validas = ", ".join(indexdb.PROVENANCE_COLS)
+    for key in parsed.missing:
+        if key not in indexdb.PROVENANCE_COLS:
+            raise QueryError(
+                f"missing:{key} não é uma lacuna rastreada — "
+                f"chaves válidas: {validas}")
+    if parsed.facets.get("regime") == "mirror":
+        raise QueryError(
+            "missing: descreve lacunas de procedência do regime curado; "
+            "grão espelhado não tem procedência por construção")
+
+
 def _prefilter(parsed: router.ParsedQuery) -> "tuple[str | None, list]":
     clauses: list[str] = []
     params: list = []
-    for key in ("type", "env", "project", "regime"):
+    for key in ("type", "env", "project", "regime",
+                *indexdb.PROVENANCE_COLS):
         if key in parsed.facets:
             clauses.append(f"e.{key} = ?")
             params.append(parsed.facets[key])
+    for key in parsed.missing:
+        clauses.append(_MISSING_CLAUSE[key])
     for tag in parsed.tags:
         clauses.append("EXISTS(SELECT 1 FROM entry_tags t"
                        " WHERE t.entry_rowid = e.rowid AND t.tag = ?)")

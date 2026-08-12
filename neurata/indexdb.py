@@ -318,7 +318,7 @@ def _entries_fits(con: sqlite3.Connection) -> bool:
     return not cols or _current_entries_columns() <= cols
 
 
-_PROVENANCE_COLS = ("agent", "session", "origin")
+PROVENANCE_COLS = ("agent", "session", "origin")
 
 
 def migrate_if_needed(con: sqlite3.Connection,
@@ -386,7 +386,7 @@ def _v7_to_v8(con: sqlite3.Connection, home: NeurataHome) -> None:
     con.execute("BEGIN IMMEDIATE")
     try:
         existing = entries_columns(con)
-        for col in _PROVENANCE_COLS:
+        for col in PROVENANCE_COLS:
             if col not in existing:
                 con.execute(f"ALTER TABLE entries ADD COLUMN {col} TEXT")
         for rowid, path in con.execute(

@@ -275,7 +275,9 @@ def _build_parser() -> argparse.ArgumentParser:
 
     qry = sub.add_parser("query", help="busca lexical + grafo → cards")
     qry.add_argument(
-        "q", help='texto e/ou facets (type:/tag:/env:/project:/regime:)')
+        "q",
+        help="texto e/ou facets (type:/tag:/env:/project:/regime:/"
+             "agent:/session:/origin:, e missing:<facet>)")
     qry.add_argument("--limit", type=int, default=10)
     qry.add_argument("--json", action="store_true",
                      default=argparse.SUPPRESS)

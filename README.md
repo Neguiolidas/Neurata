@@ -51,6 +51,9 @@ neurata tick
 neurata query "term"
 neurata query "term regime:curated"   # facet: what the archive owns
                                       # (regime:mirror = synced from a source)
+neurata query "term agent:hermes"     # provenance: who deposited it
+                                      # (agent:/session:/origin:, curated only)
+neurata query "term missing:agent"    # the gaps: curated grains with no agent
 neurata expand <id>          # card → summary → full
 
 # archive health

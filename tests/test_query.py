@@ -136,3 +136,100 @@ def test_malicious_queries_never_leak_fts_errors(tmp_path):
         # sqlite3.OperationalError — sintaxe FTS vazando pro usuário.
         with contextlib.suppress(QueryError):
             query(home, q)
+
+
+# ---- v1.1: facetas de procedência + missing: ----------------------------
+
+def _setup_prov(tmp_path):
+    """Fixture controlada: 2 curados com agente, 1 curado sem, 1 mirror.
+
+    O mirror existe para provar que ele nunca entra numa faceta de
+    procedência — as colunas dele são NULL por construção.
+    """
+    home = _home(tmp_path)
+    _write(home, "grao-a",
+           ["id: 02A", "title: Grão A", "source:", "  agent: hermes",
+            "  session: s-1", "  origin: manual"],
+           "Deploy do serviço com RRF.\n")
+    _write(home, "grao-b",
+           ["id: 02B", "title: Grão B", "source:", "  agent: hermes",
+            "  session: s-2", "  origin: auto"],
+           "Deploy do serviço com BM25.\n")
+    _write(home, "grao-sem-agente",
+           ["id: 02C", "title: Grão C", "source:", "  origin: manual"],
+           "Deploy do serviço sem agente.\n")
+    # espelho: `source_key` é o que define o regime — e o `source:` dele,
+    # se houver, é do autor original, não uma procedência de depósito.
+    _write(home, "espelho",
+           ["id: 02D", "title: Espelho", "source_key: claude-code:x",
+            "source:", "  agent: hermes"],
+           "Deploy do serviço espelhado.\n")
+    reindex(home)
+    return home
+
+
+def _slugs(res):
+    return {c["slug"] for c in res["results"]}
+
+
+def test_agent_facet_filters_curated_only(tmp_path):
+    res = query(_setup_prov(tmp_path), "agent:hermes")
+    assert _slugs(res) == {"grao-a", "grao-b"}
+
+
+def test_provenance_facet_never_surfaces_mirror(tmp_path):
+    home = _setup_prov(tmp_path)
+    assert _slugs(query(home, "deploy agent:hermes")) == {"grao-a", "grao-b"}
+
+
+def test_agent_with_mirror_regime_is_empty_not_error(tmp_path):
+    res = query(_setup_prov(tmp_path), "agent:hermes regime:mirror")
+    assert res["results"] == []
+
+
+def test_session_and_origin_facets(tmp_path):
+    home = _setup_prov(tmp_path)
+    assert _slugs(query(home, "session:s-2")) == {"grao-b"}
+    assert _slugs(query(home, "origin:manual")) == {"grao-a",
+                                                    "grao-sem-agente"}
+
+
+def test_missing_agent_lists_curated_gaps(tmp_path):
+    res = query(_setup_prov(tmp_path), "missing:agent")
+    assert _slugs(res) == {"grao-sem-agente"}
+
+
+def test_missing_partitions_the_curated_set(tmp_path):
+    """|missing:agent| + |agent:*| == |curados|, sem sobra nem sobreposição."""
+    home = _setup_prov(tmp_path)
+    com = _slugs(query(home, "agent:hermes"))
+    sem = _slugs(query(home, "missing:agent"))
+    assert com.isdisjoint(sem)
+    assert com | sem == {"grao-a", "grao-b", "grao-sem-agente"}
+
+
+def test_missing_unknown_key_errors_listing_valid(tmp_path):
+    with pytest.raises(QueryError) as exc:
+        query(_setup_prov(tmp_path), "missing:xpto")
+    msg = str(exc.value)
+    assert "xpto" in msg
+    for key in ("agent", "session", "origin"):
+        assert key in msg
+
+
+def test_missing_with_mirror_regime_errors(tmp_path):
+    """Mirror não tem procedência: pedir a lacuna dele é erro de uso,
+    não uma lista vazia que o usuário leria como 'está tudo curado'."""
+    with pytest.raises(QueryError):
+        query(_setup_prov(tmp_path), "missing:agent regime:mirror")
+
+
+def test_missing_alone_is_not_empty_query(tmp_path):
+    res = query(_setup_prov(tmp_path), "missing:origin")
+    assert res["results"] == []  # todo curado tem origin nesta fixture
+
+
+def test_empty_query_message_lists_new_facets(tmp_path):
+    with pytest.raises(QueryError) as exc:
+        query(_home(tmp_path), "   ")
+    assert "agent:" in str(exc.value)

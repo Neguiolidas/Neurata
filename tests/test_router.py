@@ -79,3 +79,48 @@ def test_facet_regime_e_extraida():
     parsed = parse("regime:curated token")
     assert parsed.facets["regime"] == "curated"
     assert parsed.tokens == ["token"]  # faceta sai do texto de busca
+
+
+# ---- v1.1: facetas de procedência + missing: ----------------------------
+
+def test_provenance_facets_extracted():
+    p = parse("rrf agent:hermes session:s-1 origin:manual")
+    assert p.tokens == ["rrf"]
+    assert p.facets == {
+        "agent": "hermes", "session": "s-1", "origin": "manual"}
+
+
+def test_missing_is_conjunction():
+    p = parse("missing:agent missing:origin")
+    assert p.missing == ["agent", "origin"]
+    assert p.tokens == []
+    assert p.has_facets
+
+
+def test_missing_unknown_key_is_parsed_not_judged():
+    """`parse` não valida: quem lista as chaves válidas é `query`."""
+    assert parse("missing:xpto").missing == ["xpto"]
+
+
+def test_quoted_provenance_facet_is_literal():
+    p = parse('"agent:hermes" resto')
+    assert p.phrases == ["agent:hermes"]
+    assert p.facets == {}
+    assert p.tokens == ["resto"]
+
+
+def test_missing_repeated_dedups_preserving_order():
+    assert parse("missing:origin missing:agent missing:origin").missing == [
+        "origin", "agent"]
+
+
+def test_grammar_covers_every_provenance_column():
+    """A gramática do parser e o schema do índice não podem divergir em
+    silêncio: coluna nova sem facet vira token de texto sem ninguém notar."""
+    from neurata.indexdb import PROVENANCE_COLS
+    q = " ".join(f"{col}:v{i}" for i, col in enumerate(PROVENANCE_COLS))
+    p = parse(q)
+    assert set(p.facets) == set(PROVENANCE_COLS)
+    assert p.tokens == []
+    assert parse(" ".join(f"missing:{c}" for c in PROVENANCE_COLS)).missing \
+        == list(PROVENANCE_COLS)

@@ -5,11 +5,14 @@ Tokens são quotados; operadores FTS5 não são expostos. Propriedade
 garantida: nenhuma query de usuário produz OperationalError de sintaxe.
 """
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from neurata.textnorm import normalize
 
-_FACET = re.compile(r"(?:^|(?<=\s))(type|tag|env|project|regime):(\S+)")
+_FACET = re.compile(
+    r"(?:^|(?<=\s))"
+    r"(type|tag|env|project|regime|agent|session|origin):(\S+)")
+_MISSING = re.compile(r"(?:^|(?<=\s))missing:(\S+)")
 _PHRASE = re.compile(r'"([^"]+)"')
 _SKILL = re.compile(r"\bcomo fa[çc]o\b|\bhow do i\b", re.IGNORECASE)
 _WORD = re.compile(r"\w")
@@ -28,9 +31,11 @@ class ParsedQuery:
     text: str
     tokens: list[str]
     phrases: list[str]
-    facets: dict[str, str]  # type/env/project/regime
+    facets: dict[str, str]  # type/env/project/regime/agent/session/origin
     tags: list[str]
     skill_hint: bool
+    # acrescentado no fim com default: a única construção é posicional
+    missing: list[str] = field(default_factory=list)
 
     @property
     def has_text(self) -> bool:
@@ -38,7 +43,7 @@ class ParsedQuery:
 
     @property
     def has_facets(self) -> bool:
-        return bool(self.facets or self.tags)
+        return bool(self.facets or self.tags or self.missing)
 
 
 def parse(q: str) -> ParsedQuery:
@@ -48,6 +53,7 @@ def parse(q: str) -> ParsedQuery:
     rest = _PHRASE.sub(" ", q).replace('"', " ")  # aspa desbalanceada=literal
     facets: dict[str, str] = {}
     tags: list[str] = []
+    missing: list[str] = []
 
     def _take(m: "re.Match[str]") -> str:
         key, val = m.group(1), m.group(2)
@@ -57,10 +63,19 @@ def parse(q: str) -> ParsedQuery:
             facets[key] = val
         return " "
 
+    def _take_missing(m: "re.Match[str]") -> str:
+        key = m.group(1).lower()
+        if key not in missing:  # conjunção idempotente, ordem preservada
+            missing.append(key)
+        return " "
+
+    # `missing:` antes de `_FACET`: nenhuma chave colide, mas a ordem
+    # torna a precedência explícita em vez de acidental.
+    rest = _MISSING.sub(_take_missing, rest)
     rest = _FACET.sub(_take, rest)
     # token sem \w (só símbolo) nunca vira MATCH — some do fan-out
     tokens = [t for t in rest.split() if _WORD.search(t)]
-    return ParsedQuery(q, tokens, phrases, facets, tags, skill)
+    return ParsedQuery(q, tokens, phrases, facets, tags, skill, missing)
 
 
 def _formas(norm_t: list[str]) -> list[str]:
