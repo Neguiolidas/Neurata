@@ -7,10 +7,12 @@ import hashlib
 import os
 
 import pytest
+from conftest import forge_v7_entries, insert_entry, set_index_version
 
 from neurata.frontmatter import parse
 from neurata.home import NeurataHome
-from neurata.indexdb import connect
+from neurata.indexdb import connect, fts_insert
+from neurata.query import query
 from neurata.reindex import reindex
 from neurata.snapshot import list_snapshots
 from neurata.tick import (
@@ -1081,3 +1083,113 @@ def test_write_then_log_orphan_reconciliation_runs_before_new_catalog(
     assert report.processed == 2
     assert (home.library / "orphan3.md").is_file()
     assert list(home.inbox.glob("*.md")) == []
+
+
+# ── v1.1: procedência curada ─────────────────────────────────────────
+
+def test_tick_writes_provenance_for_curated_item(tmp_path):
+    """Item comum passando pelo tick carrega o envelope pro índice."""
+    home = _home(tmp_path)
+    (home.inbox / "dep.md").write_text(
+        "---\nid: 01TP\ntitle: Depositada\nsource:\n  agent: hermes\n"
+        "  session: s-7\n  origin: manual\n---\nCorpo do grão.\n",
+        encoding="utf-8")
+    curate_tick(home)
+    con = connect(home)
+    row = con.execute(
+        "SELECT agent, session, origin FROM entries WHERE id='01TP'"
+    ).fetchone()
+    assert tuple(row) == ("hermes", "s-7", "manual")
+
+
+def test_tick_mirror_never_gets_provenance(tmp_path):
+    """Invariante do regime: espelho é NULL nas três colunas MESMO com
+    `source:` no arquivo — o `source:` de um arquivo espelhado é do autor
+    externo, e atribuí-lo faria `agent:hermes` devolver material que
+    hermes nunca depositou."""
+    home = _home(tmp_path)
+    body = "Corpo espelhado."
+    content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    (home.inbox / "sk.md").write_text(
+        "---\nid: 01TM\ntype: skill\nenv: claude-code\ntitle: Skill X\n"
+        "description: d\nsource_key: claude-code:x\nsource_path: /tmp/x\n"
+        "source:\n  agent: hermes\n  session: s-7\n  origin: manual\n"
+        f"created: 2026-01-01T00:00:00+00:00\ncontent_hash: {content_hash}\n"
+        f"---\n{body}", encoding="utf-8")
+    curate_tick(home)
+    con = connect(home)
+    row = con.execute(
+        "SELECT regime, agent, session, origin FROM entries WHERE id='01TM'"
+    ).fetchone()
+    assert tuple(row) == ("mirror", None, None, None)
+
+
+def test_reindex_agrees_with_tick_on_provenance(tmp_path):
+    """Índice é cache descartável: reconstruí-lo do zero tem de dar as
+    mesmas três colunas que o caminho incremental do tick gravou."""
+    home = _home(tmp_path)
+    (home.inbox / "dep.md").write_text(
+        "---\nid: 01TA\ntitle: A\nsource:\n  agent: hermes\n"
+        "  session: s-7\n  origin: manual\n---\nCorpo A.\n",
+        encoding="utf-8")
+    curate_tick(home)
+    con = connect(home)
+    before = con.execute(
+        "SELECT id, regime, agent, session, origin FROM entries"
+        " ORDER BY id").fetchall()
+    con.close()
+    reindex(home)
+    con = connect(home)
+    after = con.execute(
+        "SELECT id, regime, agent, session, origin FROM entries"
+        " ORDER BY id").fetchall()
+    assert before == after
+
+
+# ── tick sobre schema antigo sem carimbo (v1.1, F3) ───────────────────
+# Que `stamp_if_unversioned` não carimbe colunas velhas é unidade, e vive
+# em test_indexdb.py; aqui interessa a porta: o tick nem chega a escrever.
+
+def test_tick_refuses_old_unstamped_index_instead_of_crashing_midway(tmp_path):
+    """Índice sem carimbo não é sinônimo de índice novo: pode ser um v7
+    que nunca foi carimbado. Escrever nele estoura `OperationalError:
+    table entries has no column named agent` no meio da curadoria, com
+    parte do trabalho já feito. O tick recusa na entrada, com a instrução
+    de cura."""
+    home = _home(tmp_path)
+    digest = _lib_entry(home, "motor-v7.md", "01V7", "Motor V7",
+                        "vetores fundidos")
+    con = connect(home)
+    forge_v7_entries(con)
+    insert_entry(con, "01V7", "motor-v7", "library/motor-v7.md", "Motor V7",
+                 content_hash=digest)
+    set_index_version(con, None)
+    con.close()
+
+    with pytest.raises(TickStructuralError, match="reindex"):
+        curate_tick(home)
+
+
+def test_query_heals_old_unstamped_index_by_reindexing(tmp_path):
+    """A mesma forma velha pela porta da busca: `query` tem cura própria
+    (`_ensure_searchable` reindexa quando há `.md` no disco), então ela
+    responde em vez de recusar."""
+    home = _home(tmp_path)
+    digest = _lib_entry(home, "motor-v7.md", "01V7", "Motor V7",
+                        "vetores fundidos")
+    con = connect(home)
+    forge_v7_entries(con)
+    insert_entry(con, "01V7", "motor-v7", "library/motor-v7.md", "Motor V7",
+                 content_hash=digest)
+    # Texto no FTS: sem ele a busca não acha candidato e devolve lista
+    # vazia sem chegar na projeção — passaria por ausência de dados, não
+    # por cura.
+    rowid = con.execute("SELECT rowid FROM entries WHERE id='01V7'"
+                        ).fetchone()[0]
+    fts_insert(con, rowid, "curated", title="Motor V7", aliases="",
+               tags="", body="vetores fundidos")
+    set_index_version(con, None)
+    con.close()
+
+    out = query(home, "vetores")
+    assert [r["id"] for r in out["results"]] == ["01V7"]

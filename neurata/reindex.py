@@ -29,6 +29,7 @@ from neurata.indexdb import (
     create_schema,
     drop_schema,
     fts_insert,
+    provenance,
     regime_of,
 )
 
@@ -193,8 +194,9 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
-        " grain_quality, shingles, source_key, regime)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " grain_quality, shingles, source_key, regime,"
+        " agent, session, origin)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
          title, description,
@@ -202,7 +204,7 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
          str(meta.get("created", "")), str(meta.get("updated",
                                                     meta.get("created", ""))),
          grain_quality, shingles_json, meta.get("source_key"),
-         regime_of(meta)))
+         regime_of(meta), *provenance(meta)))
     rowid = cur.lastrowid
     assert rowid is not None  # INSERT sempre popula lastrowid
     fts_insert(con, rowid, regime_of(meta), title=title, aliases=aliases_text,

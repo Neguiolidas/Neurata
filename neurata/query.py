@@ -46,6 +46,7 @@ def query(home: NeurataHome, qstr: str, limit: int = 10) -> dict:
     _ensure_searchable(home)
     con = connect(home)
     try:
+        _migrate(con, home)
         _check_schema(con)
         pre_sql, pre_params = _prefilter(parsed)
         if not parsed.has_text:
@@ -100,6 +101,25 @@ def _ensure_searchable(home: NeurataHome) -> None:
         raise QueryError(
             "há conteúdo não indexado e o índice está travado por outro "
             "processo — repita depois ou rode `neurata reindex`") from exc
+
+
+def _migrate(con: sqlite3.Connection, home: NeurataHome) -> None:
+    """Migra um índice de versão anterior antes de checar o schema —
+    buscar é o caminho quente e ninguém deve ser mandado rodar `reindex`
+    (que relê a library inteira) por uma migração de segundos.
+
+    Lock ocupado é o mesmo caso de `_ensure_searchable`: outro processo
+    está escrevendo, o pedido não é atendível agora, e mandar reindexar
+    seria pior conselho ainda.
+    """
+    try:
+        indexdb.migrate_if_needed(con, home)
+    except indexdb.LockHeldError as exc:
+        raise QueryError(
+            "o índice precisa migrar de versão e está travado por outro "
+            "processo — repita depois") from exc
+    except indexdb.IndexSchemaError as exc:
+        raise QueryError(str(exc)) from exc
 
 
 def _check_schema(con: sqlite3.Connection) -> None:

@@ -27,6 +27,7 @@ from neurata.indexdb import (
     connect,
     entry_purge,
     fts_insert,
+    provenance,
     regime_of,
 )
 from neurata.snapshot import commit_tick, ensure_repo
@@ -69,6 +70,9 @@ def curate_tick(home: NeurataHome, budget: "int | None" = None) -> TickReport:
         con = connect(home)
         try:
             try:
+                # `_migrate_locked`, não a entrada pública: o lock já é
+                # nosso desde o `with` acima e pedi-lo de novo travaria.
+                indexdb._migrate_locked(con, home)
                 indexdb.check_schema(con, require_reindexed=False)
             except indexdb.IndexSchemaError as exc:
                 raise TickStructuralError(str(exc)) from exc
@@ -684,8 +688,9 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
-        " grain_quality, shingles, source_key, regime)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " grain_quality, shingles, source_key, regime,"
+        " agent, session, origin)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
          title, description,
@@ -694,7 +699,7 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
          str(meta.get("updated", meta.get("created", ""))),
          grain_quality, shingles_json,
          str(source_key) if source_key else None,
-         regime_of(meta)))
+         regime_of(meta), *provenance(meta)))
     rowid = cur.lastrowid
     assert rowid is not None
     fts_insert(con, rowid, regime_of(meta), title=title, aliases=aliases_text,

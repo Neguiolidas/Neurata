@@ -1,8 +1,11 @@
 """neurata/indexdb.py — índice sqlite descartável. FTS5 = requisito duro."""
+import functools
 import json
 import os
 import sqlite3
 
+from neurata import frontmatter
+from neurata.frontmatter import FrontmatterError
 from neurata.home import NeurataHome
 from neurata.textnorm import normalize
 
@@ -15,9 +18,10 @@ _REMEDY = (
 )
 
 # Versão do schema do ÍNDICE (meta 'index_schema_version'); distinta do
-# SCHEMA_VERSION do config em home.py. Só o reindex grava; check_schema
-# (público) checa — v7: coluna `regime` e pista `curated_fts` (dois regimes).
-INDEX_SCHEMA_VERSION = 7
+# SCHEMA_VERSION do config em home.py. Reindex e migração gravam;
+# check_schema (público) checa — v8: colunas de procedência
+# (`agent`/`session`/`origin`) sobre a v7 (coluna `regime` + `curated_fts`).
+INDEX_SCHEMA_VERSION = 8
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -57,9 +61,21 @@ CREATE TABLE IF NOT EXISTS entries(
   shingles TEXT NOT NULL,
   source_key TEXT,
   regime TEXT NOT NULL DEFAULT 'curated'
-         CHECK(regime IN ('mirror', 'curated'))
+         CHECK(regime IN ('mirror', 'curated')),
+  agent TEXT,
+  session TEXT,
+  origin TEXT
 );
 """
+
+# NULL é o valor certo pras três: procedência é do regime curado, e mesmo
+# lá o envelope `source:` é opcional. Sem DEFAULT, portanto — string vazia
+# seria um valor inventado que `missing:` teria de desfazer.
+#
+# `CREATE TABLE IF NOT EXISTS` NÃO altera uma `entries` v7 já em disco:
+# índice antigo continua sem estas colunas até a migração rodar. É por isso
+# que `_MIGRATIONS` existe, e é por isso que `stamp_if_unversioned` verifica
+# as colunas em vez de deduzir a versão.
 
 # Índices sobre `entries` ficam fora de `_SCHEMA`: `CREATE TABLE IF NOT
 # EXISTS` não altera uma `entries` legada (v5/v6) já em disco, então criar
@@ -131,6 +147,29 @@ def regime_of(meta: dict) -> str:
     return "mirror" if meta.get("source_key") else "curated"
 
 
+def provenance(meta: dict) -> "tuple[str | None, str | None, str | None]":
+    """(agent, session, origin) do envelope `source:` — NULL quando ausente.
+
+    Frontmatter é entrada não confiável: `source:` pode vir escalar, e cada
+    campo pode vir com tipo errado. Nada aqui coage — `str(["x"])` indexaria
+    `"['x']"` como nome de agente, inventando uma procedência que não existe.
+    Vazio e ausente colapsam em NULL para que `missing:agent` signifique uma
+    coisa só. Espelho não tem autor — o sistema de origem já está em
+    `source_key` — e um `source:` que apareça num arquivo espelhado é do
+    autor original, não de quem depositou: regime mirror é NULL por
+    construção, não por acaso do conteúdo espelhado.
+    """
+    src = meta.get("source")
+    if meta.get("source_key") or not isinstance(src, dict):
+        return (None, None, None)
+
+    def _field(key: str) -> "str | None":
+        v = src.get(key)
+        return v.strip() or None if isinstance(v, str) else None
+
+    return (_field("agent"), _field("session"), _field("origin"))
+
+
 class FTS5MissingError(RuntimeError):
     def __init__(self) -> None:
         super().__init__(_REMEDY)
@@ -153,21 +192,27 @@ def connect(home: NeurataHome) -> sqlite3.Connection:
 
 
 def stamp_if_unversioned(con: sqlite3.Connection) -> None:
-    """Chamado por `tick` ao fim de um run que catalogou algo. Um INSERT
-    em `entries` só pode ter sucesso se as colunas da DDL atual (ex.:
-    `source_key`, v6) já existirem na tabela — schema antigo real faria
-    o INSERT falhar com OperationalError antes de chegar aqui. Logo,
-    entries não-vazia + sem linha de versão é prova suficiente de que o
-    schema já está em INDEX_SCHEMA_VERSION; grava a versão pra destravar
-    `query` sem exigir `reindex` redundante. Índice ainda vazio (nenhum
-    item catalogado) NÃO é marcado — indistinguível de haver arquivos
-    em library/ nunca indexados; só `reindex()` promove esse caso."""
+    """Carimba um índice sem linha de versão quando ele *comprovadamente*
+    já está no schema atual, pra destravar `query` sem `reindex` redundante.
+
+    A prova é a tabela: as colunas de `entries` contêm as da versão corrente.
+    A versão anterior deduzia isso de "houve INSERT, logo o schema é novo" —
+    argumento que só vale num run que inseriu algo. Um tick de `inbox` vazia
+    sobre um índice v7 não insere nada e carimbaria v8 sem base, promovendo
+    o índice velho a `current` e desligando toda a cura a jusante: o próximo
+    INSERT com proveniência morre em `table entries has no column named
+    agent`, e `query` deixa de reindexar por achar o índice em dia.
+
+    Índice vazio NÃO é carimbado — indistinguível de haver arquivos em
+    library/ nunca indexados; só `reindex()` promove esse caso."""
     has_version = con.execute(
         "SELECT 1 FROM meta WHERE key='index_schema_version'").fetchone()
     if has_version:
         return
     has_entries = con.execute("SELECT 1 FROM entries LIMIT 1").fetchone()
     if not has_entries:
+        return
+    if not _current_entries_columns() <= entries_columns(con):
         return
     con.execute(
         "INSERT OR REPLACE INTO meta VALUES ('index_schema_version', ?)",
@@ -191,6 +236,20 @@ def ensure_fts5(con: sqlite3.Connection) -> None:
 
 def entries_columns(con: sqlite3.Connection) -> set:
     return {row[1] for row in con.execute("PRAGMA table_info(entries)")}
+
+
+@functools.lru_cache(maxsize=1)
+def _current_entries_columns() -> frozenset:
+    """Colunas de `entries` na DDL corrente, lidas da própria DDL num banco
+    de memória. Uma lista escrita à mão desatualizaria no dia em que a v9
+    ganhasse uma coluna — que é exatamente o dia em que `stamp_if_unversioned`
+    voltaria a carimbar schema velho."""
+    probe = sqlite3.connect(":memory:")
+    try:
+        probe.executescript(_SCHEMA)
+        return frozenset(entries_columns(probe))
+    finally:
+        probe.close()
 
 
 def create_schema(con: sqlite3.Connection) -> None:
@@ -229,18 +288,136 @@ def check_schema(con: sqlite3.Connection,
     falha estrutural pra curadoria mecânica — é só ausência de dados
     (shingle_sets vazio), tratado normalmente pelo dedup.
 
-    SELECT puro no meta — zero efeito colateral. Público (promovido de
-    `query._check_schema`) pra `tick` também poder validar na entrada
-    do run, antes de rodar near-dup contra um índice sem coluna
-    `shingles` (v4).
+    "Sem carimbo" não é sinônimo de "recém-inicializado": um índice de
+    versão anterior que nunca ganhou a linha de versão também cai aqui.
+    Por isso a tolerância de `require_reindexed=False` exige a prova
+    estrutural — as colunas de `entries` conterem as da DDL corrente.
+    Sem ela, o tick escreveria e só descobriria a incompatibilidade no
+    meio da curadoria, num `OperationalError: table entries has no
+    column named agent` cru, com parte do trabalho já gravada.
+
+    Leitura pura (meta + PRAGMA) — zero efeito colateral. Público
+    (promovido de `query._check_schema`) pra `tick` também poder validar
+    na entrada do run, antes de rodar near-dup contra um índice sem
+    coluna `shingles` (v4).
     """
     state = schema_state(con)
     if state == "current":
         return
-    if state == "unstamped" and not require_reindexed:
+    if state == "unstamped" and not require_reindexed and _entries_fits(con):
         return
     raise IndexSchemaError(
         "índice ausente ou em schema antigo — rode `neurata reindex`")
+
+
+def _entries_fits(con: sqlite3.Connection) -> bool:
+    """`entries` comporta a DDL corrente? Tabela ausente conta como sim:
+    é home recém-inicializado, ausência de dados e não schema velho —
+    quem escreve cria antes de gravar."""
+    cols = entries_columns(con)
+    return not cols or _current_entries_columns() <= cols
+
+
+_PROVENANCE_COLS = ("agent", "session", "origin")
+
+
+def migrate_if_needed(con: sqlite3.Connection,
+                      home: NeurataHome) -> "int | None":
+    """Migra o índice pro schema corrente, se houver caminho. Devolve a
+    versão resultante, ou `None` quando não havia o que migrar.
+
+    Entrada pública dos chamadores que ainda não detêm o lock: pega o
+    `IndexLock` e repete a checagem sob ele, porque entre o SELECT barato
+    e o lock outro processo pode ter migrado (ou reindexado) o mesmo
+    índice. `LockHeldError` propaga — migrar é escrita, e duas escritas
+    concorrentes sobre a mesma DDL não têm resultado definido.
+
+    Pré-condição: `con` sem transação aberta (o caso logo após `connect`).
+    """
+    if schema_state(con) != "mismatch":
+        return None
+    with IndexLock(home):
+        return _migrate_locked(con, home)
+
+
+def _migrate_locked(con: sqlite3.Connection,
+                    home: NeurataHome) -> "int | None":
+    """Corpo da migração, assumindo o lock **já detido** pelo chamador.
+
+    Existe separado porque `tick` roda inteiro dentro de um `IndexLock`:
+    chamar a entrada pública lá dentro pediria o lock que ele mesmo tem e
+    morreria em `LockHeldError` — o deadlock que uma reentrância aparente
+    esconde melhor do que dois nomes explícitos.
+    """
+    if schema_state(con) != "mismatch":
+        return None
+    stamped = _stamped_version(con)
+    step = _MIGRATIONS.get(stamped) if stamped is not None else None
+    if step is None:
+        raise IndexSchemaError(
+            "índice em schema antigo sem caminho de migração — rode "
+            "`neurata reindex`")
+    step(con, home)
+    return _stamped_version(con)
+
+
+def _stamped_version(con: sqlite3.Connection) -> "int | None":
+    """Versão carimbada como inteiro; `None` se ausente ou ilegível — que
+    é o mesmo veredito prático: não há de onde migrar."""
+    row = con.execute(
+        "SELECT value FROM meta WHERE key='index_schema_version'").fetchone()
+    try:
+        return int(row[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _v7_to_v8(con: sqlite3.Connection, home: NeurataHome) -> None:
+    """v7 → v8: pendura `agent`/`session`/`origin` e reconstrói a
+    procedência dos curados a partir do frontmatter — os arquivos são a
+    fonte de verdade; o índice sempre foi descartável.
+
+    Tudo numa transação explícita, inclusive a DDL (sqlite reverte
+    `ALTER TABLE`): um crash no meio não pode deixar colunas penduradas
+    sem carimbo, estado em que o próximo INSERT acharia o schema novo.
+    O carimbo é a penúltima escrita — nunca existe v8 anunciado com
+    colunas vazias.
+    """
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        existing = entries_columns(con)
+        for col in _PROVENANCE_COLS:
+            if col not in existing:
+                con.execute(f"ALTER TABLE entries ADD COLUMN {col} TEXT")
+        for rowid, path in con.execute(
+                "SELECT rowid, path FROM entries"
+                " WHERE regime='curated'").fetchall():
+            agent, session, origin = _grain_provenance(home, path)
+            con.execute("UPDATE entries SET agent=?, session=?, origin=?"
+                        " WHERE rowid=?", (agent, session, origin, rowid))
+        con.execute("INSERT OR REPLACE INTO meta VALUES"
+                    " ('index_schema_version', '8')")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
+def _grain_provenance(home: NeurataHome,
+                      path: str) -> "tuple[str | None, str | None, str | None]":
+    """Procedência de um grão do disco; tudo `None` se o arquivo sumiu ou
+    não parseia. Um `.md` apagado na mão não pode segurar a migração do
+    índice inteiro refém — a linha fica sem procedência e `reindex`
+    conserta quando o arquivo voltar."""
+    try:
+        meta, _ = frontmatter.parse(
+            (home.root / path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, FrontmatterError):
+        return (None, None, None)
+    return provenance(meta)
+
+
+_MIGRATIONS = {7: _v7_to_v8}
 
 
 def load_shingle_sets(con: sqlite3.Connection) -> "dict[str, frozenset]":

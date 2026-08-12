@@ -230,7 +230,7 @@ def test_reindex_rebuilds_v6_index_to_v7(tmp_path):
     version = con.execute(
         "SELECT value FROM meta WHERE key='index_schema_version'"
     ).fetchone()[0]
-    assert version == str(INDEX_SCHEMA_VERSION) == "7"
+    assert version == str(INDEX_SCHEMA_VERSION) == "8"
 
 
 def test_reindex_locked_matches_public_reindex(tmp_path):
@@ -253,3 +253,48 @@ def test_reindex_locked_matches_public_reindex(tmp_path):
                 "ambiguous_links"):
         assert result2[key] == result[key]
     assert isinstance(result2["duration_ms"], int)
+
+
+def test_reindex_writes_provenance_columns(tmp_path):
+    """v1.1 F2: `source:` do frontmatter vira coluna consultável."""
+    home = _home(tmp_path)
+    (home.library / "curada.md").write_text(
+        "---\nid: 01P\ntitle: Curada\nsource:\n  agent: hermes\n"
+        "  session: s-42\n  origin: cli\n---\nCorpo.\n")
+    reindex(home)
+    con = connect(home)
+    row = con.execute(
+        "SELECT agent, session, origin"
+        " FROM entries WHERE id='01P'").fetchone()
+    assert tuple(row) == ("hermes", "s-42", "cli")
+
+
+def test_reindex_without_source_writes_nulls(tmp_path):
+    """Ausência de procedência é NULL — não string vazia, senão
+    `missing:agent` não consegue distinguir os dois casos."""
+    home = _home(tmp_path)
+    (home.library / "sem-fonte.md").write_text(
+        "---\nid: 01Q\ntitle: Sem fonte\n---\nCorpo.\n")
+    reindex(home)
+    con = connect(home)
+    row = con.execute(
+        "SELECT agent, session, origin"
+        " FROM entries WHERE id='01Q'").fetchone()
+    assert tuple(row) == (None, None, None)
+
+
+def test_reindex_deposited_entry_carries_provenance(tmp_path):
+    """Caminho real ponta a ponta: deposit grava `source:` achatado,
+    reindex tem que ler dali sem nenhum acordo extra."""
+    home = _home(tmp_path)
+    res = deposit(home, "Conteúdo qualquer.", title="Depositada",
+                  agent="hermes", session="s-99")
+    reindex(home)
+    con = connect(home)
+    row = con.execute(
+        "SELECT agent, session, origin"
+        " FROM entries WHERE id=?", (res["id"],)).fetchone()
+    # `origin` é DERIVADO pelo deposit (não é parâmetro): "manual" p/
+    # conteúdo inline, o path p/ `--file`. Quem consultar `origin:` está
+    # perguntando "por onde entrou", não "quem mandou".
+    assert tuple(row) == ("hermes", "s-99", "manual")

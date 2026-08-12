@@ -3,6 +3,7 @@ import json
 import sqlite3
 
 import pytest
+from conftest import forge_v7_entries, insert_entry, set_index_version
 
 from neurata.home import NeurataHome
 from neurata.indexdb import (
@@ -17,6 +18,9 @@ from neurata.indexdb import (
     ensure_fts5,
     fts5_available,
     load_shingle_sets,
+    provenance,
+    schema_state,
+    stamp_if_unversioned,
 )
 
 
@@ -149,9 +153,46 @@ def test_create_schema_has_source_key_column(tmp_path):
     assert "source_key" in column_names
 
 
-def test_index_schema_version_is_7():
-    """v7 = coluna `regime` + pista `curated_fts`."""
-    assert INDEX_SCHEMA_VERSION == 7
+def test_index_schema_version_is_8():
+    """v8 = colunas de procedência (`agent`/`session`/`origin`)."""
+    assert INDEX_SCHEMA_VERSION == 8
+
+
+def test_create_schema_has_provenance_columns(tmp_path):
+    """Índice novo já nasce com as colunas de procedência da v8."""
+    con = connect(_home(tmp_path))
+    columns = {col[1] for col in con.execute("PRAGMA table_info(entries)")}
+    assert {"agent", "session", "origin"} <= columns
+
+
+def test_provenance_extracts_the_three_fields():
+    meta = {"source": {"agent": "hermes", "session": "s1",
+                       "origin": "cli", "git_branch": "main"}}
+    assert provenance(meta) == ("hermes", "s1", "cli")
+
+
+def test_provenance_without_source_is_all_none():
+    assert provenance({"id": "01A"}) == (None, None, None)
+
+
+@pytest.mark.parametrize("bad", ["hermes", ["hermes"], 7, None])
+def test_provenance_source_not_a_dict_is_all_none(bad):
+    """Frontmatter é entrada não confiável: `source:` escalar não explode."""
+    assert provenance({"source": bad}) == (None, None, None)
+
+
+@pytest.mark.parametrize("bad", [7, {"a": 1}, ["x"], None])
+def test_provenance_non_string_field_is_none(bad):
+    """Campo não-string vira NULL, não `str(...)`: indexar "['x']" como
+    nome de agente seria inventar um agente que não existe."""
+    meta = {"source": {"agent": bad, "session": "s1", "origin": "cli"}}
+    assert provenance(meta) == (None, "s1", "cli")
+
+
+def test_provenance_empty_string_is_none():
+    """"" e ausente são a mesma coisa — senão `missing:agent` mentiria."""
+    meta = {"source": {"agent": "  ", "session": "", "origin": "cli"}}
+    assert provenance(meta) == (None, None, "cli")
 
 
 def test_check_schema_raises_on_v6_index(tmp_path):
@@ -219,3 +260,70 @@ def test_source_key_accepts_value(tmp_path):
     row = con.execute(
         "SELECT source_key FROM entries WHERE id='u1'").fetchone()
     assert row[0] == "some-source-key"
+
+
+# ── stamp_if_unversioned: verificação direta de colunas (v1.1, F3) ────
+
+def test_stamp_refuses_index_whose_columns_are_old(tmp_path):
+    """Índice v7 sem carimbo e com entries não-vazia NÃO pode ser
+    carimbado: a prova indutiva ("um INSERT só passa no schema novo")
+    não vale num run que não inseriu nada. Carimbar aqui promoveria o
+    schema velho a `current` e desligaria a cura a jusante."""
+    con = connect(_home(tmp_path))
+    forge_v7_entries(con)
+    insert_entry(con, "v7a", "motor-v7", "library/motor-v7.md", "Motor V7")
+    set_index_version(con, None)
+
+    stamp_if_unversioned(con)
+
+    assert schema_state(con) == "unstamped"
+
+
+def test_stamp_marks_index_whose_columns_are_current(tmp_path):
+    """Contraparte: colunas de procedência presentes + entries não-vazia
+    → carimba, que é o caso que destrava `query` sem reindex redundante."""
+    con = connect(_home(tmp_path))
+    insert_entry(con, "v8a", "motor-v8", "library/motor-v8.md", "Motor V8")
+    set_index_version(con, None)
+
+    stamp_if_unversioned(con)
+
+    row = con.execute("SELECT value FROM meta WHERE"
+                      " key='index_schema_version'").fetchone()
+    assert row[0] == str(INDEX_SCHEMA_VERSION)
+
+
+def test_stamp_is_noop_on_empty_index(tmp_path):
+    """Índice vazio segue não-carimbado — indistinguível de library com
+    arquivos nunca indexados; só `reindex` promove esse caso."""
+    con = connect(_home(tmp_path))
+    set_index_version(con, None)
+
+    stamp_if_unversioned(con)
+
+    assert schema_state(con) == "unstamped"
+
+
+# ── check_schema: sem carimbo ≠ índice novo (v1.1, F3) ────────────────
+
+def test_check_schema_rejects_unstamped_index_with_old_columns(tmp_path):
+    """A tolerância de `require_reindexed=False` existe pro home recém-
+    inicializado. Um v7 nunca carimbado tem a mesma cara no meta e cara
+    diferente na tabela: quem escrever nele morre em `no column named
+    agent` no meio do trabalho."""
+    con = connect(_home(tmp_path))
+    forge_v7_entries(con)
+    insert_entry(con, "v7a", "motor-v7", "library/motor-v7.md", "Motor V7")
+    set_index_version(con, None)
+
+    with pytest.raises(IndexSchemaError, match="reindex"):
+        check_schema(con, require_reindexed=False)
+
+
+def test_check_schema_accepts_unstamped_index_with_current_columns(tmp_path):
+    """Contraparte: o home recém-inicializado que a tolerância protege —
+    sem carimbo, sem dados, colunas correntes. O tick roda."""
+    con = connect(_home(tmp_path))
+    set_index_version(con, None)
+
+    check_schema(con, require_reindexed=False)

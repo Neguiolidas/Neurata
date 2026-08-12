@@ -15,7 +15,7 @@ from pathlib import Path, PurePath
 
 from neurata.frontmatter import FrontmatterError, parse, serialize
 from neurata.home import NeurataHome
-from neurata.indexdb import check_schema, connect
+from neurata.indexdb import check_schema, connect, migrate_if_needed
 from neurata.providers import GENERIC, REGISTRY, resolve
 from neurata.ulid import new_ulid
 
@@ -144,6 +144,9 @@ def harvest(home: NeurataHome, target: str,
 
     con = connect(home)
     try:
+        # Harvest não detém o lock aqui; `LockHeldError` sobe e a CLI já
+        # a traduz (mesmo tratamento que qualquer escrita concorrente).
+        migrate_if_needed(con, home)
         check_schema(con, require_reindexed=False)
 
         known: dict = {}

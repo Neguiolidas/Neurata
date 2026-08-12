@@ -89,17 +89,38 @@ def test_lock_held_raises_instead_of_returning_empty(tmp_path):
         query(home, "conteúdo")
 
 
-def test_stale_schema_still_raises(tmp_path):
-    """Versão presente mas divergente continua sendo erro explícito —
-    self-heal aqui é decisão separada, não vem de carona."""
-    home = _home(tmp_path)
-    _write(home, "nota", ["id: 01A", "title: Nota"], "conteúdo qualquer\n")
+def _stamp(home, value):
     con = connect(home)
     con.execute("INSERT OR REPLACE INTO meta VALUES "
-                "('index_schema_version', ?)",
-                (str(INDEX_SCHEMA_VERSION - 1),))
+                "('index_schema_version', ?)", (str(value),))
     con.commit()
     con.close()
 
+
+def test_stale_schema_without_migration_path_still_raises(tmp_path):
+    """Divergência sem caminho de migração continua sendo erro explícito
+    — self-heal aqui é decisão separada, não vem de carona.
+
+    A versão usada é a *seguinte* à corrente: o caso real é um binário
+    antigo abrindo índice escrito por um novo, e migração não anda pra
+    trás. Divergência pra baixo virou caso de migração na v1.1 e está
+    coberta em `test_migrate.py`.
+    """
+    home = _home(tmp_path)
+    _write(home, "nota", ["id: 01A", "title: Nota"], "conteúdo qualquer\n")
+    _stamp(home, INDEX_SCHEMA_VERSION + 1)
+
     with pytest.raises(QueryError):
         query(home, "conteúdo")
+
+
+def test_migratable_schema_is_migrated_not_refused(tmp_path):
+    """A contrapartida: v7 tem caminho, então `query` migra e responde em
+    vez de mandar o usuário rodar `reindex`."""
+    home = _home(tmp_path)
+    _write(home, "nota", ["id: 01A", "title: Nota"], "conteúdo qualquer\n")
+    query(home, "conteúdo")          # indexa e carimba a corrente
+    _stamp(home, 7)
+
+    assert query(home, "conteúdo")["results"]
+    assert _stamped_version(home) == str(INDEX_SCHEMA_VERSION)
