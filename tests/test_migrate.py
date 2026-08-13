@@ -9,7 +9,7 @@ import sqlite3
 import pytest
 from conftest import forge_v7_entries, insert_entry, set_index_version
 
-from neurata import frontmatter
+from neurata import frontmatter, indexdb
 from neurata.deposit import deposit
 from neurata.harvest import harvest
 from neurata.home import NeurataHome
@@ -316,5 +316,51 @@ def test_harvest_migrates_stamped_v7_instead_of_refusing(tmp_path):
         # o `harvest` não reconcilia a biblioteca: aqui o backfill do grão
         # v7 tem de estar de pé depois de atravessar a porta.
         assert _prov(con, "c1") == ("hermes", "s-1", "manual")
+    finally:
+        con.close()
+
+
+def test_migration_step_that_does_not_stamp_raises(tmp_path, monkeypatch):
+    """Passo que esquece de carimbar viraria laço infinito sob IndexLock —
+    e laço infinito sob lock trava o acervo inteiro. Vira erro."""
+    home, con = _v7(tmp_path)
+    con.close()
+    monkeypatch.setitem(indexdb._MIGRATIONS, 7, lambda con, home: None)
+    con = connect(home)
+    try:
+        with pytest.raises(IndexSchemaError, match="não avançou"):
+            migrate_if_needed(con, home)
+    finally:
+        con.close()
+
+
+def test_migration_step_that_moves_backwards_raises(tmp_path, monkeypatch):
+    """Progresso é estrito: carimbar pra trás também é laço."""
+    home, con = _v7(tmp_path)
+    con.close()
+
+    def _regride(con, home):
+        con.execute("INSERT OR REPLACE INTO meta VALUES"
+                    " ('index_schema_version', '6')")
+        con.commit()
+
+    monkeypatch.setitem(indexdb._MIGRATIONS, 7, _regride)
+    con = connect(home)
+    try:
+        with pytest.raises(IndexSchemaError, match="não avançou"):
+            migrate_if_needed(con, home)
+    finally:
+        con.close()
+
+
+def test_migration_stops_when_no_further_step(tmp_path):
+    """Com um passo só no dicionário, o loop para em v8 e devolve v8 —
+    o encadeamento não pode inventar destino."""
+    home, con = _v7(tmp_path)
+    _curated(home, con, "c1", "hermes", "s-1", "manual")
+    con.close()
+    con = connect(home)
+    try:
+        assert migrate_if_needed(con, home) == 8
     finally:
         con.close()

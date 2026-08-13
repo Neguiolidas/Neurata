@@ -376,17 +376,33 @@ def _migrate_locked(con: sqlite3.Connection,
     chamar a entrada pública lá dentro pediria o lock que ele mesmo tem e
     morreria em `LockHeldError` — o deadlock que uma reentrância aparente
     esconde melhor do que dois nomes explícitos.
+
+    Encadeia os passos disponíveis: devolve a versão final alcançada, não
+    a do primeiro passo.
     """
     if schema_state(con) != "mismatch":
         return None
     stamped = _stamped_version(con)
-    step = _MIGRATIONS.get(stamped) if stamped is not None else None
-    if step is None:
+    if stamped is None or stamped not in _MIGRATIONS:
         raise IndexSchemaError(
             "índice em schema antigo sem caminho de migração — rode "
             "`neurata reindex`")
-    step(con, home)
-    return _stamped_version(con)
+
+    # Encadeia enquanto houver passo (D6): um índice v7 tem que chegar ao
+    # schema corrente numa chamada, senão quem nunca migrou da v1.0 fica
+    # preso no meio do caminho. Invariante de progresso estrito: passo que
+    # não aumenta o carimbo é laço infinito sob IndexLock — que trava o
+    # acervo inteiro —, então vira erro na primeira volta.
+    while (step := _MIGRATIONS.get(stamped)) is not None:
+        step(con, home)
+        current = _stamped_version(con)
+        if current is None or current <= stamped:
+            raise IndexSchemaError(
+                f"migração v{stamped} não avançou o carimbo "
+                f"(agora: {current}) — passo defeituoso, índice parado "
+                "onde estava; rode `neurata reindex`")
+        stamped = current
+    return stamped
 
 
 def _stamped_version(con: sqlite3.Connection) -> "int | None":
