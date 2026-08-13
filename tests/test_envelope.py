@@ -76,6 +76,27 @@ def test_git_context_short_output_no_commit_yet(tmp_path):
     assert ctx == {"root": str(tmp_path.resolve())}
 
 
+def test_git_context_real_repo_without_commit(tmp_path):
+    """Repo recém-criado (`git init`, nenhum commit) ainda é um repo, e o
+    projeto sai da raiz — não do commit. O git real devolve rc=128 aqui
+    (HEAD não resolve) mas imprime o toplevel mesmo assim; abortar no rc
+    apagaria a proveniência inteira justo no começo de um projeto."""
+    subprocess.run(["git", "init", "-q", str(tmp_path)],
+                   check=True, capture_output=True)
+    ctx = _git_context(tmp_path)
+    assert ctx == {"root": str(tmp_path.resolve())}
+
+
+def test_git_context_ignores_garbage_when_rev_parse_fails(tmp_path):
+    """Com rc≠0 só se aproveita saída que seja caminho absoluto. `HEAD`
+    solto na stdout não pode virar raiz de projeto (`Path('HEAD').resolve()`
+    inventaria um diretório sob o cwd)."""
+    fake = subprocess.CompletedProcess(args=[], returncode=128,
+                                       stdout="HEAD\n")
+    with patch("neurata.envelope.subprocess.run", return_value=fake):
+        assert _git_context(tmp_path) == {}
+
+
 _HOST_VARS = ("NEURATA_AGENT", "NEURATA_SESSION", "AI_AGENT",
               "CLAUDE_CODE_SESSION_ID")
 

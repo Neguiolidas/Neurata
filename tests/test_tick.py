@@ -5,6 +5,7 @@ Cobre §1 (pipeline geral), §3 (renames/órfãos/entradas mortas) e §4
 """
 import hashlib
 import os
+import subprocess
 
 import pytest
 from conftest import forge_v7_entries, insert_entry, set_index_version
@@ -1250,3 +1251,38 @@ def test_tick_survives_list_project_in_frontmatter(tmp_path):
         assert con.execute("SELECT project FROM entries").fetchone()[0] is None
     finally:
         con.close()
+
+
+def test_deposit_inside_agent_indexes_provenance_and_project(tmp_path,
+                                                             monkeypatch):
+    """Critérios 1 e 4: o depósito feito de dentro de um agente grava
+    `agent`/`session` sem flag nenhuma, o `project` sai do repo, e as
+    facets da v1.1 passam a ter dado — que era o ponto da versão."""
+    from neurata.deposit import deposit
+
+    repo = tmp_path / "Neurata"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+
+    monkeypatch.delenv("NEURATA_AGENT", raising=False)
+    monkeypatch.delenv("NEURATA_SESSION", raising=False)
+    monkeypatch.setenv("AI_AGENT", "claude-code_2-1-229_agent")
+    monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "s-ponta-a-ponta")
+    monkeypatch.chdir(repo)
+
+    home = _home(tmp_path / "acervo")
+    deposit(home, title="Grão xenoglossia", content="corpo do grão")
+    curate_tick(home)
+
+    con = connect(home)
+    try:
+        assert con.execute(
+            "SELECT agent, session, project FROM entries").fetchone() == (
+                "claude-code", "s-ponta-a-ponta", "Neurata")
+    finally:
+        con.close()
+
+    assert len(query(home, "project:Neurata")["results"]) == 1
+    assert len(query(home, "session:s-ponta-a-ponta")["results"]) == 1
+    assert len(query(home, "agent:claude-code")["results"]) == 1
+    assert query(home, "missing:agent")["results"] == []

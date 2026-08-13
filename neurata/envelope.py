@@ -88,12 +88,16 @@ def _git_context(cwd: Path) -> dict:
             capture_output=True, text=True, timeout=2, check=False)
     except (OSError, subprocess.TimeoutExpired):
         return {}
-    if proc.returncode != 0:
-        return {}
     lines = proc.stdout.strip().splitlines()
-    if len(lines) < 3:
-        # repo sem commit: --show-toplevel funciona, HEAD falha junto no rc,
-        # mas alguns gits devolvem só o toplevel — trata como repo válido.
-        return {"root": str(Path(lines[0]).resolve())} if lines else {}
-    return {"root": str(Path(lines[0]).resolve()),
-            "commit": lines[1][:12], "branch": lines[2]}
+    if proc.returncode == 0 and len(lines) >= 3:
+        return {"root": str(Path(lines[0]).resolve()),
+                "commit": lines[1][:12], "branch": lines[2]}
+    # Repo sem commit ainda é repo: `--show-toplevel` imprime a raiz e o
+    # `HEAD` do mesmo comando falha (rc=128). Abortar no rc apagaria a
+    # proveniência — e o projeto, que vem da raiz — justo no início de um
+    # projeto novo. Só se aproveita a primeira linha se for caminho
+    # absoluto: com rc≠0 ela pode ser resto do erro do git ("HEAD"), e
+    # `Path("HEAD").resolve()` inventaria uma raiz sob o cwd.
+    if lines and Path(lines[0]).is_absolute():
+        return {"root": str(Path(lines[0]).resolve())}
+    return {}
