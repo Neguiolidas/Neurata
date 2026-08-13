@@ -1193,3 +1193,23 @@ def test_query_heals_old_unstamped_index_by_reindexing(tmp_path):
 
     out = query(home, "vetores")
     assert [r["id"] for r in out["results"]] == ["01V7"]
+
+
+def test_tick_survives_list_project_in_frontmatter(tmp_path):
+    """`project: [a, b]` hoje derruba o tick inteiro com ProgrammingError
+    ("Error binding parameter 9: type 'list'"). Passa a virar NULL — um
+    grão mal escrito não pode matar a curadoria dos outros.
+
+    A lista tem que ser inline: o parser restrito rejeita bloco `- a` como
+    linha inválida, e aí o grão nem chega ao INSERT (testaria nada).
+    """
+    home = _home(tmp_path)
+    _inbox(home, "a.md", "---\ntitle: Grão\nproject: [a, b]\n---\ncorpo\n")
+    report = curate_tick(home)
+    assert report.processed == 1
+    assert report.errors == []
+    con = connect(home)
+    try:
+        assert con.execute("SELECT project FROM entries").fetchone()[0] is None
+    finally:
+        con.close()

@@ -3,6 +3,7 @@ import functools
 import json
 import os
 import sqlite3
+from pathlib import PurePosixPath
 
 from neurata import frontmatter
 from neurata.frontmatter import FrontmatterError
@@ -168,6 +169,33 @@ def provenance(meta: dict) -> "tuple[str | None, str | None, str | None]":
         return v.strip() or None if isinstance(v, str) else None
 
     return (_field("agent"), _field("session"), _field("origin"))
+
+
+def project_of(meta: dict) -> "str | None":
+    """Projeto do grão: explícito no frontmatter, senão o basename do
+    `source.git.root` do envelope. `None` quando não dá pra saber.
+
+    Derivado em vez de gravado (D3): o arquivo já contém a verdade e o
+    índice é descartável — gravar `project:` duplicaria um valor derivável
+    e criaria duas fontes que podem discordar. Mirror é `None` por
+    construção, como em `provenance()`: cache de sistema externo não é
+    trabalho feito num repo meu. Não coage tipo: `project: [a, b]` vira
+    `None`, não `"['a', 'b']"` — e antes desta função uma lista aqui
+    derrubava o tick inteiro no bind do INSERT.
+    """
+    if meta.get("source_key"):
+        return None
+
+    explicit = meta.get("project")
+    if isinstance(explicit, str) and explicit.strip():
+        return explicit.strip()
+
+    src = meta.get("source")
+    git = src.get("git") if isinstance(src, dict) else None
+    root = git.get("root") if isinstance(git, dict) else None
+    if not isinstance(root, str) or not root.strip():
+        return None
+    return PurePosixPath(root.strip()).name or None
 
 
 class FTS5MissingError(RuntimeError):

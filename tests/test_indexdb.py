@@ -18,6 +18,7 @@ from neurata.indexdb import (
     ensure_fts5,
     fts5_available,
     load_shingle_sets,
+    project_of,
     provenance,
     schema_state,
     stamp_if_unversioned,
@@ -327,3 +328,45 @@ def test_check_schema_accepts_unstamped_index_with_current_columns(tmp_path):
     set_index_version(con, None)
 
     check_schema(con, require_reindexed=False)
+
+
+def test_project_of_prefers_explicit_over_git_root():
+    meta = {"project": "Explicito",
+            "source": {"git": {"root": "/repos/Neurata"}}}
+    assert project_of(meta) == "Explicito"
+
+
+def test_project_of_derives_basename_from_git_root():
+    meta = {"source": {"git": {"root": "/repos/Neurata"}}}
+    assert project_of(meta) == "Neurata"
+
+
+def test_project_of_ignores_trailing_slash_in_git_root():
+    meta = {"source": {"git": {"root": "/repos/Neurata/"}}}
+    assert project_of(meta) == "Neurata"
+
+
+def test_project_of_is_none_for_mirror():
+    """Espelho é cache de sistema externo, não trabalho num repo meu —
+    `None` por construção, como em `provenance()`."""
+    meta = {"source_key": "obsidian:vault/x", "project": "Qualquer",
+            "source": {"git": {"root": "/repos/Alheio"}}}
+    assert project_of(meta) is None
+
+
+@pytest.mark.parametrize("meta", [
+    {},
+    {"project": "   "},
+    {"project": ["a", "b"]},
+    {"project": {"nome": "x"}},
+    {"project": 42},
+    {"source": "escalar"},
+    {"source": {"git": "escalar"}},
+    {"source": {"git": {"root": ""}}},
+    {"source": {"git": {"root": 42}}},
+    {"source": {"git": {"root": "/"}}},
+])
+def test_project_of_collapses_garbage_to_none(meta):
+    """Frontmatter é entrada não confiável e nada aqui coage tipo:
+    `str(["a","b"])` indexaria `"['a', 'b']"` como nome de projeto."""
+    assert project_of(meta) is None
