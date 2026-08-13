@@ -32,15 +32,17 @@ _AVAIL: "bool | None" = None
 _SUBJECT_CATEGORIES = (
     ("processed", "+", "catalogados"),
     ("updated", "~", "atualizado"),
+    ("absorbed", "↻", "absorvido"),
     ("quarantined", "-", "quarentena"),
     ("conflicts", "⚠", "dup"),
     ("renamed", "→", "rename"),
 )
 
-# Ordem fixa do body (spec §3): sempre as 6 linhas, mesmo com valor 0.
+# Ordem fixa do body (spec §3): sempre as 7 linhas, mesmo com valor 0.
 _BODY_LABELS = (
     ("cataloga:", "processed"),
     ("atualiza:", "updated"),
+    ("absorve:", "absorbed"),
     ("quarentena:", "quarantined"),
     ("near-dup:", "conflicts"),
     ("rename:", "renamed"),

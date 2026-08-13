@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 SCHEMA_VERSION = 1
-CONTRACT_VERSION = 3  # v0.6: tick emite snapshot (sha do commit) no envelope
+CONTRACT_VERSION = 4  # v1.2: envelope do tick ganha a linha `absorve:`
 
 _DIRS = ("library", "inbox", "archive", "quarantine", "logs")
 

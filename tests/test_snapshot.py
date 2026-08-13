@@ -170,14 +170,15 @@ def test_tick_subject_zero_report_falls_back_to_generic_message():
     assert _tick_subject(report) == "snapshot: metadados atualizados"
 
 
-def test_tick_body_shows_all_six_categories_with_extras_and_footer():
+def test_tick_body_shows_all_seven_categories_with_extras_and_footer():
     report = TickReport(tick="01JTICK0000000000000000000", processed=3,
-                        literate=2, updated=1, quarantined=2, conflicts=1,
-                        renamed=0, stale=0)
+                        literate=2, updated=1, absorbed=4, quarantined=2,
+                        conflicts=1, renamed=0, stale=0)
     body = _tick_body(report)
     assert body == (
         "cataloga:    3  (2 alfabetizados)\n"
         "atualiza:    1  (source-keyed in-place)\n"
+        "absorve:     4\n"
         "quarentena:  2  (duplicata exata)\n"
         "near-dup:    1  (marcado conflito)\n"
         "rename:      0\n"
@@ -191,9 +192,27 @@ def test_tick_body_shows_all_six_categories_with_extras_and_footer():
 def test_tick_body_omits_parenthetical_extras_when_counts_zero():
     report = TickReport(tick="01JTICK0000000000000000000")
     body = _tick_body(report)
-    for line in body.splitlines()[:6]:
+    for line in body.splitlines()[:7]:
         assert "(" not in line
     assert body.splitlines()[0] == "cataloga:    0"
+
+
+def test_tick_body_has_seven_fixed_lines():
+    body = _tick_body(TickReport(tick="01JTICK0000000000000000000"))
+    linhas, rodape = body.split("\n\n")
+    assert len(linhas.splitlines()) == 7
+
+
+def test_absorbed_appears_in_subject(tmp_path):
+    report = TickReport(tick="01JTICK0000000000000000000", absorbed=2)
+    assert _tick_subject(report) == "snapshot: ↻2 absorvido"
+
+
+def test_contract_version_is_four():
+    """Aditivo, mas o precedente da v0.6 (campo `snapshot`) bumpou por
+    aditivo: consumidor que fixa versão merece saber que o envelope
+    cresceu."""
+    assert CONTRACT_VERSION == 4
 
 
 def test_tick_body_processed_extra_gated_on_literate_not_processed():

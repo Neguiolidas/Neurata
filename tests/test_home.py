@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from neurata.home import CONTRACT_VERSION, SCHEMA_VERSION, NeurataHome
+from neurata.home import SCHEMA_VERSION, NeurataHome
 
 
 def test_env_var_resolution(tmp_path, monkeypatch):
@@ -19,7 +19,8 @@ def test_init_creates_layout(tmp_path):
         assert d.is_dir()
     cfg = home.load_config()
     assert cfg["schema_version"] == SCHEMA_VERSION
-    assert CONTRACT_VERSION == 3
+    # O pin de CONTRACT_VERSION vive em test_snapshot.py (dono do envelope);
+    # duplicá-lo aqui faria um bump exigir dois edits.
 
 
 def test_init_idempotent_preserves_config(tmp_path):

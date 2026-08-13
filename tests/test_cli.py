@@ -3,6 +3,7 @@ import json
 import subprocess
 
 from neurata.cli import main
+from neurata.home import CONTRACT_VERSION
 
 
 def test_deposit_json_roundtrip(tmp_path, monkeypatch, capsys):
@@ -10,7 +11,7 @@ def test_deposit_json_roundtrip(tmp_path, monkeypatch, capsys):
     rc = main(["deposit", "conhecimento novo", "--title", "T", "--json"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["contract_version"] == 3
+    assert out["contract_version"] == CONTRACT_VERSION
     assert out["ok"] is True
     assert out["command"] == "deposit"
     assert out["result"]["action"] == "created"
@@ -63,7 +64,7 @@ def test_json_flag_global_position(tmp_path, monkeypatch, capsys):
     rc = main(["--json", "deposit", "x"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["contract_version"] == 3
+    assert out["contract_version"] == CONTRACT_VERSION
     assert out["ok"] is True
     assert out["command"] == "deposit"
     assert out["result"]["action"] == "created"
@@ -443,7 +444,7 @@ def test_tick_json_catalogs_inbox_item(tmp_path, monkeypatch, capsys):
     rc = main(["tick", "--json"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["contract_version"] == 3
+    assert out["contract_version"] == CONTRACT_VERSION
     result = out["result"]
     assert result["processed"] == 1
     assert "snapshot" in result
@@ -631,7 +632,7 @@ def test_snapshot_manual_commit_json_noop_then_commits_dirty_change(
     rc = main(["snapshot", "--json"])
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["contract_version"] == 3
+    assert out["contract_version"] == CONTRACT_VERSION
     assert out["ok"] is True
     assert out["command"] == "snapshot"
     assert out["result"] == {"ok": True, "snapshot": None, "changed": False}
