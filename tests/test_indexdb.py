@@ -1,10 +1,14 @@
 """tests/test_indexdb.py"""
 import json
 import sqlite3
+import subprocess
+from pathlib import Path
 
 import pytest
 from conftest import forge_v7_entries, insert_entry, set_index_version
 
+from neurata.deposit import deposit
+from neurata.frontmatter import parse
 from neurata.home import NeurataHome
 from neurata.indexdb import (
     INDEX_SCHEMA_VERSION,
@@ -154,9 +158,23 @@ def test_create_schema_has_source_key_column(tmp_path):
     assert "source_key" in column_names
 
 
-def test_index_schema_version_is_8():
-    """v8 = colunas de procedência (`agent`/`session`/`origin`)."""
-    assert INDEX_SCHEMA_VERSION == 8
+def test_index_schema_version_is_9():
+    """v9 = coluna `project`, derivada do frontmatter. Literal de
+    propósito: o número é contrato com índices no disco, então subir a
+    constante tem que quebrar um teste e forçar um passo de migração."""
+    assert INDEX_SCHEMA_VERSION == 9
+
+
+def test_create_schema_has_project_column(tmp_path):
+    """Índice novo já nasce com a coluna da v9 — senão só quem migrou
+    de um índice antigo teria `project`, e a query divergiria por origem
+    do banco."""
+    con = connect(_home(tmp_path))
+    try:
+        cols = {r[1] for r in con.execute("PRAGMA table_info(entries)")}
+        assert "project" in cols
+    finally:
+        con.close()
 
 
 def test_create_schema_has_provenance_columns(tmp_path):
@@ -330,19 +348,49 @@ def test_check_schema_accepts_unstamped_index_with_current_columns(tmp_path):
     check_schema(con, require_reindexed=False)
 
 
+def test_project_of_reads_what_the_depositor_actually_writes(tmp_path,
+                                                             monkeypatch):
+    """Âncora contra ficção: a forma vem do writer real, não de um dict
+    escrito à mão. `project_of` já leu `source.git.root` aninhado — que
+    nenhum writer produz, porque o frontmatter é um subset de um nível e
+    `deposit._flatten` achata para `git_root` — e o bug passou por todo o
+    unitário justamente por os testes fabricarem a forma que testavam.
+
+    Repo próprio em vez de herdar o cwd da suíte: o nome do projeto que
+    se afirma tem que ser escolhido pelo teste, não pelo diretório de
+    onde o pytest foi chamado.
+    """
+    repo = tmp_path / "MeuProjeto"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    # Precisa de commit: sem HEAD resolvível o `rev-parse` sai com rc != 0
+    # e o envelope fica sem git nenhum.
+    subprocess.run(["git", "-C", str(repo),
+                    "-c", "user.email=t@t", "-c", "user.name=t",
+                    "commit", "-q", "--allow-empty", "-m", "c0"], check=True)
+    monkeypatch.chdir(repo)
+
+    home = _home(tmp_path / "home")
+    rec = deposit(home, "corpo em repo", title="Grao")
+    meta, _ = parse((home.root / rec["path"]).read_text(encoding="utf-8"))
+
+    assert meta["source"]["git_root"] == str(Path(repo).resolve())
+    assert project_of(meta) == "MeuProjeto"
+
+
 def test_project_of_prefers_explicit_over_git_root():
     meta = {"project": "Explicito",
-            "source": {"git": {"root": "/repos/Neurata"}}}
+            "source": {"git_root": "/repos/Neurata"}}
     assert project_of(meta) == "Explicito"
 
 
 def test_project_of_derives_basename_from_git_root():
-    meta = {"source": {"git": {"root": "/repos/Neurata"}}}
+    meta = {"source": {"git_root": "/repos/Neurata"}}
     assert project_of(meta) == "Neurata"
 
 
 def test_project_of_ignores_trailing_slash_in_git_root():
-    meta = {"source": {"git": {"root": "/repos/Neurata/"}}}
+    meta = {"source": {"git_root": "/repos/Neurata/"}}
     assert project_of(meta) == "Neurata"
 
 
@@ -350,7 +398,7 @@ def test_project_of_is_none_for_mirror():
     """Espelho é cache de sistema externo, não trabalho num repo meu —
     `None` por construção, como em `provenance()`."""
     meta = {"source_key": "obsidian:vault/x", "project": "Qualquer",
-            "source": {"git": {"root": "/repos/Alheio"}}}
+            "source": {"git_root": "/repos/Alheio"}}
     assert project_of(meta) is None
 
 
@@ -361,10 +409,10 @@ def test_project_of_is_none_for_mirror():
     {"project": {"nome": "x"}},
     {"project": 42},
     {"source": "escalar"},
-    {"source": {"git": "escalar"}},
-    {"source": {"git": {"root": ""}}},
-    {"source": {"git": {"root": 42}}},
-    {"source": {"git": {"root": "/"}}},
+    {"source": {"git_root": ""}},
+    {"source": {"git_root": 42}},
+    {"source": {"git_root": "/"}},
+    {"source": {"git": {"root": "/repos/Neurata"}}},
 ])
 def test_project_of_collapses_garbage_to_none(meta):
     """Frontmatter é entrada não confiável e nada aqui coage tipo:

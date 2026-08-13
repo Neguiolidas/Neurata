@@ -187,7 +187,7 @@ def test_reindex_source_key_null_when_absent(tmp_path):
     assert row[0] is None
 
 
-def test_reindex_rebuilds_v6_index_to_v7(tmp_path):
+def test_reindex_rebuilds_legacy_index_to_current(tmp_path):
     """Índice v6 real em disco (sem `regime`): abrir e reindexar tem de
     funcionar. Regressão do crash em que `connect()` criava índice sobre
     a coluna nova numa `entries` legada e estourava OperationalError —
@@ -230,7 +230,7 @@ def test_reindex_rebuilds_v6_index_to_v7(tmp_path):
     version = con.execute(
         "SELECT value FROM meta WHERE key='index_schema_version'"
     ).fetchone()[0]
-    assert version == str(INDEX_SCHEMA_VERSION) == "8"
+    assert version == str(INDEX_SCHEMA_VERSION)
 
 
 def test_reindex_locked_matches_public_reindex(tmp_path):

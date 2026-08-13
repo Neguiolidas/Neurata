@@ -1,8 +1,12 @@
-"""tests/test_migrate.py — migração v7 → v8 (procedência curada, §5.2/§10).
+"""tests/test_migrate.py — cadeia de migração v7 → v8 → v9.
 
-Cada teste parte de um índice v7 **forjado pela DDL histórica** (conftest),
-nunca de um v8 com o `meta` adulterado: só a tabela de verdade prova que a
-migração fez o trabalho em vez de mentir sobre ele.
+v8 = procedência curada (§5.2/§10); v9 = coluna `project` (§5.3).
+
+Cada teste parte de um índice **forjado pela DDL histórica** (conftest),
+nunca de um índice novo com o `meta` adulterado: só a tabela de verdade
+prova que a migração fez o trabalho em vez de mentir sobre ele. Quem
+começa em v7 atravessa a cadeia inteira e por isso afirma
+`INDEX_SCHEMA_VERSION`, não um literal que apodrece no próximo passo.
 """
 import sqlite3
 
@@ -14,6 +18,7 @@ from neurata.deposit import deposit
 from neurata.harvest import harvest
 from neurata.home import NeurataHome
 from neurata.indexdb import (
+    INDEX_SCHEMA_VERSION,
     IndexLock,
     IndexSchemaError,
     LockHeldError,
@@ -124,7 +129,7 @@ def test_migration_stamps_current_version(tmp_path):
 
     con = connect(home)
     try:
-        assert migrate_if_needed(con, home) == 8
+        assert migrate_if_needed(con, home) == INDEX_SCHEMA_VERSION
         assert schema_state(con) == "current"
     finally:
         con.close()
@@ -155,7 +160,7 @@ def test_migration_on_current_index_is_noop(tmp_path):
     home = _home(tmp_path)
     con = connect(home)
     try:
-        set_index_version(con, 8)
+        set_index_version(con, INDEX_SCHEMA_VERSION)
         assert migrate_if_needed(con, home) is None
     finally:
         con.close()
@@ -207,7 +212,7 @@ def test_migration_resumes_over_dangling_columns(tmp_path):
 
     con = connect(home)
     try:
-        assert migrate_if_needed(con, home) == 8
+        assert migrate_if_needed(con, home) == INDEX_SCHEMA_VERSION
         assert _prov(con, "c1") == ("hermes", "s-1", "manual")
     finally:
         con.close()
@@ -228,7 +233,7 @@ def test_unreadable_grain_becomes_null_and_migration_completes(tmp_path):
 
     con = connect(home)
     try:
-        assert migrate_if_needed(con, home) == 8
+        assert migrate_if_needed(con, home) == INDEX_SCHEMA_VERSION
         assert _prov(con, "sumido") == (None, None, None)
         assert _prov(con, "quebrado") == (None, None, None)
         assert _prov(con, "bom") == ("iris", "s-3", "manual")
@@ -353,14 +358,147 @@ def test_migration_step_that_moves_backwards_raises(tmp_path, monkeypatch):
         con.close()
 
 
-def test_migration_stops_when_no_further_step(tmp_path):
-    """Com um passo só no dicionário, o loop para em v8 e devolve v8 —
-    o encadeamento não pode inventar destino."""
+def test_migration_chains_v7_to_current(tmp_path):
+    """Um v7 chega ao schema corrente numa chamada só: o loop segue o
+    dicionário de passos, não um número escrito na mão."""
     home, con = _v7(tmp_path)
     _curated(home, con, "c1", "hermes", "s-1", "manual")
     con.close()
     con = connect(home)
     try:
-        assert migrate_if_needed(con, home) == 8
+        assert migrate_if_needed(con, home) == INDEX_SCHEMA_VERSION
+    finally:
+        con.close()
+
+
+# ── v8 → v9: `project` dos curados ────────────────────────────────────
+
+def _v8(tmp_path) -> "tuple[NeurataHome, sqlite3.Connection]":
+    """Índice com a DDL corrente carimbado como v8 — a coluna `project`
+    existe desde a v7, então aqui o carimbo basta: não há DDL a forjar."""
+    home = _home(tmp_path)
+    con = connect(home)
+    set_index_version(con, 8)
+    return home, con
+
+
+def _com_git_root(home, con, entry_id: str, root: str, **extra) -> None:
+    path = _write_grain(home, f"{entry_id}.md",
+                        "title: Grão\n"
+                        "source:\n"
+                        f"  git_root: {root}\n")
+    insert_entry(con, entry_id, entry_id, path, "Grão", **extra)
+
+
+def _project(con, entry_id: str) -> "str | None":
+    return con.execute("SELECT project FROM entries WHERE id=?",
+                       (entry_id,)).fetchone()[0]
+
+
+def test_v9_fills_project_from_git_root(tmp_path):
+    home, con = _v8(tmp_path)
+    _com_git_root(home, con, "c1", "/home/u/Repos/Neurata", regime="curated")
+    con.close()
+    con = connect(home)
+    try:
+        assert migrate_if_needed(con, home) == 9
+        assert _project(con, "c1") == "Neurata"
+    finally:
+        con.close()
+
+
+def test_v9_never_touches_mirror(tmp_path):
+    """Critério 3 é estrutural: mirror fica fora do WHERE, não depende de
+    o `project_of` recusar depois."""
+    home, con = _v8(tmp_path)
+    _com_git_root(home, con, "m1", "/home/u/Repos/Alheio", regime="mirror",
+                  source_key="obsidian:vault/x")
+    con.close()
+    con = connect(home)
+    try:
+        migrate_if_needed(con, home)
+        assert _project(con, "m1") is None
+    finally:
+        con.close()
+
+
+def test_v9_invents_no_provenance(tmp_path):
+    """v9 preenche `project` e só. `agent`/`session` que não existiam
+    continuam não existindo (invariante 2)."""
+    home, con = _v8(tmp_path)
+    _com_git_root(home, con, "c1", "/home/u/Repos/Neurata", regime="curated")
+    con.close()
+    con = connect(home)
+    try:
+        migrate_if_needed(con, home)
+        assert _prov(con, "c1") == (None, None, None)
+    finally:
+        con.close()
+
+
+def test_v9_skips_row_whose_file_vanished(tmp_path):
+    """Divergência deliberada do precedente: `_v7_to_v8` grava NULL quando
+    o arquivo sumiu; v9 pula a linha. v9 é enriquecimento, não
+    reconstrução — zerar dado existente por erro de leitura é perda."""
+    home, con = _v8(tmp_path)
+    _com_git_root(home, con, "c1", "/home/u/Repos/Neurata", regime="curated",
+                  project="Anterior")
+    (home.library / "c1.md").unlink()
+    con.close()
+    con = connect(home)
+    try:
+        migrate_if_needed(con, home)
+        assert _project(con, "c1") == "Anterior"
+    finally:
+        con.close()
+
+
+def test_v9_skips_row_with_broken_frontmatter(tmp_path):
+    home, con = _v8(tmp_path)
+    _com_git_root(home, con, "c1", "/home/u/Repos/Neurata", regime="curated",
+                  project="Anterior")
+    (home.library / "c1.md").write_text("---\ntitle: [\n---\ncorpo\n",
+                                        encoding="utf-8")
+    con.close()
+    con = connect(home)
+    try:
+        migrate_if_needed(con, home)
+        assert _project(con, "c1") == "Anterior"
+    finally:
+        con.close()
+
+
+class _CommitExplode(sqlite3.Connection):
+    """Conexão cujo `commit` falha enquanto armada.
+
+    `sqlite3.Connection` é tipo imutável (3.14): a explosão entra por
+    subclasse via `factory=`, não por monkeypatch do método.
+    """
+
+    armed = False
+
+    def commit(self):
+        if self.armed:
+            raise sqlite3.OperationalError("disco cheio")
+        return super().commit()
+
+
+def test_v9_is_atomic(tmp_path):
+    """Carimbo é a penúltima escrita: se o commit explodir, ninguém vê v9
+    anunciado com dado pela metade (invariante 4)."""
+    home, con = _v8(tmp_path)
+    _com_git_root(home, con, "c1", "/home/u/Repos/Neurata", regime="curated")
+    con.close()
+
+    con = sqlite3.connect(home.index_path, factory=_CommitExplode)
+    try:
+        con.armed = True
+        with pytest.raises(sqlite3.OperationalError):
+            migrate_if_needed(con, home)
+        con.armed = False
+        assert _project(con, "c1") is None
+        assert con.execute(
+            "SELECT value FROM meta WHERE key='index_schema_version'"
+        ).fetchone()[0] == "8"
     finally:
         con.close()

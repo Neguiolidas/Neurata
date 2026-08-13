@@ -22,7 +22,7 @@ _REMEDY = (
 # SCHEMA_VERSION do config em home.py. Reindex e migração gravam;
 # check_schema (público) checa — v8: colunas de procedência
 # (`agent`/`session`/`origin`) sobre a v7 (coluna `regime` + `curated_fts`).
-INDEX_SCHEMA_VERSION = 8
+INDEX_SCHEMA_VERSION = 9
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -173,7 +173,14 @@ def provenance(meta: dict) -> "tuple[str | None, str | None, str | None]":
 
 def project_of(meta: dict) -> "str | None":
     """Projeto do grão: explícito no frontmatter, senão o basename do
-    `source.git.root` do envelope. `None` quando não dá pra saber.
+    `source.git_root` do envelope. `None` quando não dá pra saber.
+
+    A chave é **plana** (`git_root`, não `git: {root: ...}`) porque o
+    frontmatter é um subset de um nível só — `deposit._flatten` achata
+    `git: {root, commit, branch}` em `git_root`/`git_commit`/`git_branch`
+    justamente por isso, e o parser colapsaria o bloco aninhado num dict
+    errado. O envelope aninhado existe, mas só em `logs/deposits.jsonl`,
+    que não alimenta o índice.
 
     Derivado em vez de gravado (D3): o arquivo já contém a verdade e o
     índice é descartável — gravar `project:` duplicaria um valor derivável
@@ -191,8 +198,7 @@ def project_of(meta: dict) -> "str | None":
         return explicit.strip()
 
     src = meta.get("source")
-    git = src.get("git") if isinstance(src, dict) else None
-    root = git.get("root") if isinstance(git, dict) else None
+    root = src.get("git_root") if isinstance(src, dict) else None
     if not isinstance(root, str) or not root.strip():
         return None
     return PurePosixPath(root.strip()).name or None
@@ -461,7 +467,54 @@ def _grain_provenance(home: NeurataHome,
     return provenance(meta)
 
 
-_MIGRATIONS = {7: _v7_to_v8}
+def _v8_to_v9(con: sqlite3.Connection, home: NeurataHome) -> None:
+    """v8 → v9: preenche `project` dos curados a partir do `.md`.
+
+    Sem DDL — a coluna `project` já está no `_SCHEMA` das duas versões
+    publicadas que este passo alcança (v7 em 1.0.0, v8 em 1.1.0); o que
+    faltava era o dado, nunca a coluna. Varre
+    só `WHERE regime='curated'`: o critério "0 mirrors tocados" é
+    estrutural, não sorte, e evita reler os arquivos de espelho por nada.
+
+    **Divergência deliberada do `_v7_to_v8`:** lá, arquivo ilegível vira
+    `NULL`; aqui a linha é **pulada**. v9 é enriquecimento, não
+    reconstrução — zerar um `project` existente por causa de um erro de
+    leitura transitório seria perda de dado, não conserto.
+
+    Mesma ordem crash-safe do passo anterior: tudo numa transação, o
+    carimbo é a penúltima escrita, nunca existe v9 anunciado com dado
+    pela metade.
+    """
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        for rowid, path in con.execute(
+                "SELECT rowid, path FROM entries"
+                " WHERE regime='curated'").fetchall():
+            project = _grain_project(home, path)
+            if project is None:
+                continue
+            con.execute("UPDATE entries SET project=? WHERE rowid=?",
+                        (project, rowid))
+        con.execute("INSERT OR REPLACE INTO meta VALUES"
+                    " ('index_schema_version', '9')")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
+def _grain_project(home: NeurataHome, path: str) -> "str | None":
+    """Projeto de um grão do disco; `None` se o arquivo sumiu, não parseia
+    ou não tem de onde derivar — os três casos em que a linha é pulada."""
+    try:
+        meta, _ = frontmatter.parse(
+            (home.root / path).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, FrontmatterError):
+        return None
+    return project_of(meta)
+
+
+_MIGRATIONS = {7: _v7_to_v8, 8: _v8_to_v9}
 
 
 def load_shingle_sets(con: sqlite3.Connection) -> "dict[str, frozenset]":
