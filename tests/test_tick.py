@@ -1022,23 +1022,60 @@ def test_write_then_log_orphan_reconciliation_is_idempotent(tmp_path):
     assert len(catalog_recs) == 1  # sem duplicar a reconciliação
 
 
-def test_write_then_log_orphan_with_hash_mismatch_is_quarantined(tmp_path):
-    # Frontmatter alega um content_hash que não bate com o corpo real em
-    # disco (corrupção, ou edição direta fora do fluxo) — não é seguro
-    # presumir a origem: quarentena, nunca deleta.
+def test_write_then_log_orphan_with_edited_body_is_absorbed(tmp_path):
+    # v1.2 (D7): corpo divergente do content_hash indexado é EDIÇÃO, não
+    # corrupção — o arquivo é a verdade. A absorção roda antes do passo
+    # de órfãos e sincroniza o hash, então a decisão de (3) recai só
+    # sobre a identidade, que aqui bate: adota em vez de quarentenar.
+    # Antes da v1.2 este mesmo cenário perdia a edição na quarentena.
     home = _home(tmp_path)
     entry_id = "01ORPHANMISMATCH00000000"
     original_body = "Corpo original que gerou o content_hash indexado.\n"
     content_hash = hashlib.sha256(
         original_body.encode("utf-8")).hexdigest()
-    tampered_body = "Corpo divergente, editado direto no disco por fora.\n"
+    edited_body = "Corpo divergente, editado direto no disco por fora.\n"
     text = (f"---\nid: {entry_id}\ntitle: Orphan Mismatch\n"
-           f"content_hash: {content_hash}\n---\n{tampered_body}")
+           f"content_hash: {content_hash}\n---\n{edited_body}")
     (home.library / "mismatch.md").write_text(text, encoding="utf-8")
-    reindex(home)  # indexa com o content_hash (incorreto) do frontmatter
+    reindex(home)  # indexa com o content_hash (obsoleto) do frontmatter
 
     report = curate_tick(home)
 
+    assert report.absorbed == 1
+    assert report.reconciled == 1
+    assert report.quarantined == 0
+    assert report.errors == []
+    assert (home.library / "mismatch.md").is_file()
+    assert list(home.quarantine.iterdir()) == []
+
+    con = connect(home)
+    try:
+        row = con.execute(
+            "SELECT content_hash FROM entries WHERE id=?",
+            (entry_id,)).fetchone()
+    finally:
+        con.close()
+    assert row[0] == hashlib.sha256(
+        edited_body.encode("utf-8")).hexdigest()
+
+
+def test_write_then_log_orphan_with_id_mismatch_is_quarantined(tmp_path):
+    # O que a absorção NÃO cobre e segue valendo quarentena: o id do
+    # arquivo não é o id indexado. Não é edição de um grão, é outro grão
+    # ocupando o lugar — presumir origem aqui seria adotar um estranho.
+    home = _home(tmp_path)
+    entry_id = "01ORPHANIDMISMATCH000000"
+    text = (f"---\nid: {entry_id}\ntitle: Orphan Mismatch\n---\n"
+           "Corpo original.\n")
+    (home.library / "mismatch.md").write_text(text, encoding="utf-8")
+    reindex(home)  # índice guarda entry_id
+
+    trocado = text.replace(entry_id, "01OUTROGRAOOCUPANDOOLUGAR")
+    (home.library / "mismatch.md").write_text(trocado, encoding="utf-8")
+
+    report = curate_tick(home)
+
+    assert report.absorbed == 0
     assert report.reconciled == 0
     assert report.quarantined == 1
     assert len(report.errors) == 1
@@ -1046,7 +1083,7 @@ def test_write_then_log_orphan_with_hash_mismatch_is_quarantined(tmp_path):
 
     quarantined_files = list(home.quarantine.iterdir())
     assert len(quarantined_files) == 1
-    assert quarantined_files[0].read_text(encoding="utf-8") == text
+    assert quarantined_files[0].read_text(encoding="utf-8") == trocado
 
     journal = _journal(home)
     q_recs = [r for r in journal if r["verb"] == "quarantine"

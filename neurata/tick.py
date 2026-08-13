@@ -57,6 +57,7 @@ class TickReport:
     updated: int = 0     # skill-item source-keyed: update in-place (§5)
     stale: int = 0       # tombstone marcou entry como stale (§5)
     reconciled: int = 0  # órfãos write-then-log adotados via re-log (T2)
+    absorbed: int = 0    # edição na mão em library/ absorvida (v1.2, §D8)
     errors: "list[ItemError]" = field(default_factory=list)
     duration_ms: int = 0
     snapshot: "str | None" = None  # sha do commit deste tick, ou None (v0.6)
@@ -84,6 +85,7 @@ def curate_tick(home: NeurataHome, budget: "int | None" = None) -> TickReport:
                     "rename() atômico exige mesmo dispositivo")
 
             _reconcile_renames(home, con, tick_id, report)
+            _absorb_edits(home, con, tick_id, report)
             _reconcile_journal_orphans(home, con, tick_id, report)
 
             items = sorted(home.inbox.glob("*.md"))
@@ -601,6 +603,73 @@ def _logged_catalog_dsts(home: NeurataHome) -> set:
     explica sua presença ali (catalog/rename/update/literate)."""
     return {rec["dst"] for rec in home.read_log("journal")
            if rec.get("verb") in _CATALOG_VERBS and rec.get("dst")}
+
+
+def _absorb_edits(home: NeurataHome, con, tick_id: str,
+                  report: TickReport) -> None:
+    """Passo 2 do preflight: edição feita na mão em `library/` é
+    absorvida — índice e frontmatter passam a servir o que está no
+    arquivo, que é a verdade.
+
+    Varre os curados (espelho é cache de fonte externa: a superfície de
+    edição dele é o vault, e o harvest já reescreve o arquivo na volta
+    seguinte). Se `sha256(body)` bate com o `content_hash` indexado, nada
+    acontece — o caso comum. Se difere:
+
+    - **Guarda de identidade:** só absorve se o `id` do arquivo bate com
+      o indexado. Diferente não é edição, é troca de identidade: passa
+      adiante e deixa `_reconcile_journal_orphans` quarentenar, que é o
+      mecanismo desenhado pra isso. Absorver seria trocar de grão em
+      silêncio.
+    - Reescreve o frontmatter a partir do meta **do próprio arquivo** —
+      não há meta novo vindo de lugar nenhum — mexendo só em
+      `content_hash`/`updated` e limpando `stale`/`stale_since`. Sem
+      isso, `doctor` seguiria acusando divergência de freshness depois
+      de um tick que já absorveu.
+    - Arquivo ilegível ou com frontmatter quebrado: pula em silêncio.
+      Julgar integridade é trabalho do `doctor`, que já reporta esses
+      arquivos; repetir o diagnóstico a cada tick só produziria ruído.
+    - Não toca `source.*`, não move arquivo, não muda `id`, `slug`,
+      `path` nem `created`.
+
+    Ordem crash-safe idêntica à do `_sync_update_in_place`: arquivo →
+    índice → commit → journal. Crash no meio deixa arquivo novo com
+    índice velho — exatamente o estado que o próximo tick absorve. A
+    idempotência sai de graça: o hash é do **corpo**, então reescrever o
+    frontmatter não realimenta o laço.
+    """
+    rows = con.execute(
+        "SELECT id, slug, path, content_hash FROM entries"
+        " WHERE location='library' AND regime='curated'").fetchall()
+    for eid, slug, rel, chash in rows:
+        full = home.root / rel
+        try:
+            meta, body = parse(full.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, FrontmatterError):
+            continue
+        content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        if content_hash == chash:
+            continue
+        if str(meta.get("id", "")) != str(eid):
+            continue  # troca de identidade: quem julga é o passo 3
+
+        merged = dict(meta)
+        merged.pop("stale", None)
+        merged.pop("stale_since", None)
+        merged["content_hash"] = content_hash
+        merged["updated"] = _now()
+        try:
+            full.write_text(serialize(merged, body), encoding="utf-8")
+        except OSError as exc:
+            report.errors.append(ItemError(rel, f"transiente (I/O): {exc}"))
+            continue
+
+        _index_delete(con, eid)
+        _index_insert(con, merged, body, rel, "library", slug)
+        con.commit()
+        if _journal(home, tick_id, "absorb", str(eid), None, rel, report,
+                    content_hash=content_hash):
+            report.absorbed += 1
 
 
 def _reconcile_journal_orphans(home: NeurataHome, con, tick_id: str,
