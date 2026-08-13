@@ -1,8 +1,36 @@
 """neurata/envelope.py — proveniência best-effort do depósito."""
+import os
+import re
 import socket
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
+
+_AGENT_VERSION = re.compile(r"^v?\d+([.\-]\d+)*$")
+
+
+def _normalize_agent(raw: str) -> str:
+    """Nome de agente sem a versão que o host pendura.
+
+    `AI_AGENT` chega como `claude-code_2-1-229_agent`; sem normalizar,
+    cada upgrade do host criaria um "agente" novo e a facet `agent:`
+    fragmentaria o acervo. Regra deliberadamente burra: separa por `_`,
+    descarta o segmento final `agent` e todo segmento que seja versão,
+    rejunta. Se sobrar vazio, devolve o cru — normalizar nunca pode
+    apagar o dado.
+    """
+    stripped = raw.strip()
+    segs = stripped.split("_")
+    if segs and segs[-1] == "agent":
+        segs = segs[:-1]
+    segs = [s for s in segs if s and not _AGENT_VERSION.match(s)]
+    return "_".join(segs) or stripped
+
+
+def _env_str(name: str) -> "str | None":
+    """Valor da env sem espaço em volta; `None` se ausente ou em branco —
+    `AI_AGENT='  '` não é um agente."""
+    return os.environ.get(name, "").strip() or None
 
 
 def capture(origin: str = "manual", agent: "str | None" = None,
@@ -29,6 +57,22 @@ def capture(origin: str = "manual", agent: "str | None" = None,
     git = _git_context(resolved_cwd)
     if git:
         env["git"] = git
+    # Precedência (D1): arg explícito > NEURATA_* > var do host > None.
+    # Argumento em branco conta como ausência: procedência vazia é `None`,
+    # nunca string vazia, senão `missing:agent` passa a significar duas
+    # coisas.
+    agent = (agent or "").strip() or None
+    if agent is None:
+        agent = _env_str("NEURATA_AGENT")
+        if agent is None:
+            raw_agent = _env_str("AI_AGENT")
+            agent = _normalize_agent(raw_agent) if raw_agent else None
+
+    session = (session or "").strip() or None
+    if session is None:
+        session = (_env_str("NEURATA_SESSION")
+                   or _env_str("CLAUDE_CODE_SESSION_ID"))
+
     if agent is not None:
         env["agent"] = agent
     if session is not None:
