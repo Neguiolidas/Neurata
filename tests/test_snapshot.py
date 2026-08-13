@@ -199,7 +199,7 @@ def test_tick_body_omits_parenthetical_extras_when_counts_zero():
 
 def test_tick_body_has_seven_fixed_lines():
     body = _tick_body(TickReport(tick="01JTICK0000000000000000000"))
-    linhas, rodape = body.split("\n\n")
+    linhas, _ = body.split("\n\n")
     assert len(linhas.splitlines()) == 7
 
 

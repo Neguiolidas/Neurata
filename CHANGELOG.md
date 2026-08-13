@@ -6,6 +6,74 @@ v0.4–v0.7 shipped under the 0.8.0 release. None of the 0.x versions was
 ever tagged or uploaded anywhere — they are development history, kept
 for the record. For anyone installing the package, 1.0.0 is the history.
 
+## [1.2.0] - 2026-08-13
+
+The provenance facets of 1.1.0 had no data to filter: nothing ever wrote
+who deposited a grain. Now the deposit reads it from the environment, and
+a grain edited by hand stops being invisible to the archive.
+
+### Added
+- Provenance is captured automatically on `deposit`. `agent` and
+  `session` come from the environment — `NEURATA_AGENT` / `NEURATA_SESSION`
+  first, then the host's `AI_AGENT` / `CLAUDE_CODE_SESSION_ID` — and an
+  explicit argument still wins over both. Absent stays `None`, never an
+  empty string: `missing:agent` has to keep meaning one thing.
+- Agent names are normalised: `claude-code_2-1-229_agent` becomes
+  `claude-code`. Without it every host upgrade would invent a new agent
+  and shatter the `agent:` facet. The rule drops a trailing `agent`
+  segment and any version-shaped segment; if that empties the name, the
+  raw value is kept — normalising must never erase the datum.
+- `project:` now has data. It is derived in the index from the basename
+  of the grain's `source.git_root`, so deposits made inside a repo answer
+  `neurata query "term project:Neurata"`. An explicit `project:` in the
+  frontmatter wins; mirrors are `None` by construction.
+- `tick` absorbs manual edits. Editing an indexed `.md` used to be
+  invisible — the preflight only ever read files the index did not know,
+  so the archive served the old body forever. The new step re-hashes each
+  library grain, and on a mismatch reindexes it in place, keeping `id`,
+  `slug`, `path`, `created` and every `source.*` field, and clearing the
+  stale mark. It only absorbs when the file's `meta.id` matches the
+  indexed one: a different id is not an edit, it is a swapped identity,
+  and that still goes to quarantine. Unreadable or broken frontmatter is
+  skipped in silence — judging integrity is `doctor`'s job.
+
+### Changed
+- `CONTRACT_VERSION` 3 → 4: the tick envelope gained `absorbed`, and the
+  snapshot body gained an `absorve:` line (7 fixed lines, was 6).
+- Index schema v9 backfills `project` for curated grains from their
+  frontmatter, under the index lock and in one transaction: 20–191 ms
+  over an index of ~15 k grains (112 curated) here, filling 79 of them —
+  the ones that carry a `source.git_root`. Mirrors are excluded by the
+  query itself, not by luck.
+- Unlike the v7→v8 backfill, v9 **skips** a grain whose file is missing
+  or unparseable instead of writing `NULL`. v9 is enrichment, not
+  reconstruction; blanking an existing value over a transient read error
+  would be a loss.
+- Migration now chains steps. An index still at v7 (written by 1.0.0)
+  used to advance one step and stop with "run `neurata reindex`"; it now
+  walks v7 → v8 → v9 in a single command, with a strict progress
+  invariant — a step that fails to advance the stamp raises instead of
+  looping forever under the index lock.
+
+### Fixed
+- A list in the frontmatter (`project: [a, b]`) crashed the tick's insert
+  with `InterfaceError`. Deriving the value through one function, beside
+  `provenance()`, applies the same defence: no type coercion, empty
+  collapses to `None`.
+- Fewer spurious quarantines. A grain that was both orphaned and edited
+  failed the hash check of the orphan step and was purged + quarantined.
+  Absorbing first syncs the hash, so that step now decides on identity
+  alone, which is what it knows how to judge.
+
+### Upgrade note
+Same rule as 1.1.0: point every consumer of a `NEURATA_HOME` at 1.2.0
+together. Measured here on a shared archive: 1.1.0 refuses to `query` or
+`tick` a v9 index ("run `neurata reindex`"), and if you do run its
+`reindex`, it rebuilds the index at v8 and drops `project`. Nothing is
+lost — the next 1.2.0 command migrates back to v9 and re-derives the
+column from the files — but the round trip costs a full reindex against
+milliseconds for the migration.
+
 ## [1.1.0] - 2026-08-12
 
 Provenance becomes searchable: who deposited a grain, in which session,

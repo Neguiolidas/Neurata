@@ -75,7 +75,7 @@ def test_absorb_serves_new_body_and_updates_hash(tmp_path):
     titulo, chash, path, _slug = _linha(home, eid)
     assert titulo == "Editado"
     assert chash == hashlib.sha256(
-        "corpo com xenoglossia\n".encode("utf-8")).hexdigest()
+        b"corpo com xenoglossia\n").hexdigest()
     assert path == rel  # não moveu
     assert [r["id"] for r in query(home, "xenoglossia")["results"]] == [eid]
 
@@ -205,7 +205,7 @@ def test_absorption_before_orphan_pass_prevents_spurious_quarantine(tmp_path):
     3 e é purgada + quarentenada. Absorver antes sincroniza o hash e
     deixa a decisão de (3) recair só sobre a identidade."""
     home = _home(tmp_path)
-    rel, eid = _catalogado(home, "a.md", "corpo velho")
+    rel, _ = _catalogado(home, "a.md", "corpo velho")
     (home.root / "logs" / "journal.jsonl").write_text("", encoding="utf-8")
     _reescreve(home, rel, corpo="corpo novo")
 

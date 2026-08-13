@@ -43,6 +43,8 @@ convenience — docs always use `neurata`.
 # deposit (stdin via '-', or positional text)
 echo "raw content" | neurata deposit -
 neurata deposit "raw content" --title "Note"
+# agent, session and project come from the environment and from the repo
+# you deposit in — nothing to pass by hand
 
 # catalogue the inbox (mechanical, reversible — nothing is destroyed)
 neurata tick
@@ -52,7 +54,8 @@ neurata query "term"
 neurata query "term regime:curated"   # facet: what the archive owns
                                       # (regime:mirror = synced from a source)
 neurata query "term agent:hermes"     # provenance: who deposited it
-                                      # (agent:/session:/origin:, curated only)
+                                      # (agent:/session:/origin:/project:,
+                                      #  curated only)
 neurata query "term missing:agent"    # the gaps: curated grains with no agent
 neurata expand <id>          # card → summary → full
 
@@ -71,6 +74,9 @@ neurata --version
 
 `neurata doctor` warns (`last-tick`) if the cron stops.
 
+`tick` also absorbs edits: fix a grain's body in your editor and the next
+tick re-hashes it into the index, keeping its id, slug and provenance.
+
 **Principles**
 
 - Files are the truth (a valid Obsidian vault); the index is a disposable cache.
@@ -78,7 +84,7 @@ neurata --version
 - Nothing is ever destroyed: archive + quarantine, never delete.
 - Zero runtime dependencies. Python ≥ 3.10.
 
-**Status:** v1.1.0. The 1.0 gate was dogfooding, not a version number:
+**Status:** v1.2.0. The 1.0 gate was dogfooding, not a version number:
 `neurata doctor` measures it, and it cleared at 12 distinct days of real
 use inside a 14-day window.
 

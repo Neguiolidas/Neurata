@@ -397,7 +397,7 @@ def _project(con, entry_id: str) -> "str | None":
 
 def test_v9_fills_project_from_git_root(tmp_path):
     home, con = _v8(tmp_path)
-    _com_git_root(home, con, "c1", "/home/u/Repos/Neurata", regime="curated")
+    _com_git_root(home, con, "c1", "/repos/Neurata", regime="curated")
     con.close()
     con = connect(home)
     try:
@@ -411,7 +411,7 @@ def test_v9_never_touches_mirror(tmp_path):
     """Critério 3 é estrutural: mirror fica fora do WHERE, não depende de
     o `project_of` recusar depois."""
     home, con = _v8(tmp_path)
-    _com_git_root(home, con, "m1", "/home/u/Repos/Alheio", regime="mirror",
+    _com_git_root(home, con, "m1", "/repos/Alheio", regime="mirror",
                   source_key="obsidian:vault/x")
     con.close()
     con = connect(home)
@@ -426,7 +426,7 @@ def test_v9_invents_no_provenance(tmp_path):
     """v9 preenche `project` e só. `agent`/`session` que não existiam
     continuam não existindo (invariante 2)."""
     home, con = _v8(tmp_path)
-    _com_git_root(home, con, "c1", "/home/u/Repos/Neurata", regime="curated")
+    _com_git_root(home, con, "c1", "/repos/Neurata", regime="curated")
     con.close()
     con = connect(home)
     try:
@@ -441,7 +441,7 @@ def test_v9_skips_row_whose_file_vanished(tmp_path):
     o arquivo sumiu; v9 pula a linha. v9 é enriquecimento, não
     reconstrução — zerar dado existente por erro de leitura é perda."""
     home, con = _v8(tmp_path)
-    _com_git_root(home, con, "c1", "/home/u/Repos/Neurata", regime="curated",
+    _com_git_root(home, con, "c1", "/repos/Neurata", regime="curated",
                   project="Anterior")
     (home.library / "c1.md").unlink()
     con.close()
@@ -455,7 +455,7 @@ def test_v9_skips_row_whose_file_vanished(tmp_path):
 
 def test_v9_skips_row_with_broken_frontmatter(tmp_path):
     home, con = _v8(tmp_path)
-    _com_git_root(home, con, "c1", "/home/u/Repos/Neurata", regime="curated",
+    _com_git_root(home, con, "c1", "/repos/Neurata", regime="curated",
                   project="Anterior")
     (home.library / "c1.md").write_text("---\ntitle: [\n---\ncorpo\n",
                                         encoding="utf-8")
@@ -487,7 +487,7 @@ def test_v9_is_atomic(tmp_path):
     """Carimbo é a penúltima escrita: se o commit explodir, ninguém vê v9
     anunciado com dado pela metade (invariante 4)."""
     home, con = _v8(tmp_path)
-    _com_git_root(home, con, "c1", "/home/u/Repos/Neurata", regime="curated")
+    _com_git_root(home, con, "c1", "/repos/Neurata", regime="curated")
     con.close()
 
     con = sqlite3.connect(home.index_path, factory=_CommitExplode)
