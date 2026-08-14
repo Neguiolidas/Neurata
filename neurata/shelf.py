@@ -144,6 +144,10 @@ def conflicts(home: NeurataHome) -> dict:
             cw = meta.get("conflicts_with", [])
             if isinstance(cw, str):
                 cw = [cw] if cw.strip() else []
+            # auto-referência nunca é conflito: grãos gravados por versões
+            # < 1.3 podem trazer o próprio id aqui (ver neurata/tick.py §4).
+            self_id = str(meta.get("id", ""))
+            cw = [c for c in cw if str(c) != self_id]
             if cw:
                 manual.append({
                     "id": str(meta.get("id", "")),

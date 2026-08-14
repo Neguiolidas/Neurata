@@ -1286,3 +1286,42 @@ def test_deposit_inside_agent_indexes_provenance_and_project(tmp_path,
     assert len(query(home, "session:s-ponta-a-ponta")["results"]) == 1
     assert len(query(home, "agent:claude-code")["results"]) == 1
     assert query(home, "missing:agent")["results"] == []
+
+
+def test_indexed_inbox_item_does_not_conflict_with_itself(tmp_path):
+    """Grão já indexado no inbox (após reindex) não conflita consigo mesmo.
+
+    Regressão: o laço de near-dup varria shingle_sets inteiro, incluindo a
+    própria entrada do item quando um reindex anterior já a havia indexado
+    (location='inbox' escapa do dedup exato, que só olha 'library').
+    Resultado: jaccard 1.0 contra si mesmo => conflicts_with: [próprio id].
+    """
+    home = _home(tmp_path)
+    item_id = "01SELFCONFLICT0000000000"
+    body = " ".join(f"palavra{i}" for i in range(30)) + ".\n"
+    _inbox(home, "solo.md",
+          f"---\nid: {item_id}\ntitle: Solo\n---\n{body}")
+    reindex(home)
+
+    report = curate_tick(home)
+
+    assert report.conflicts == 0
+    dest = next(home.library.glob("solo*.md"))
+    meta, _ = parse(dest.read_text())
+    assert "conflicts_with" not in meta
+
+
+def test_preexisting_self_conflict_is_healed(tmp_path):
+    """Auto-conflito gravado por versão antiga é removido no próximo tick."""
+    home = _home(tmp_path)
+    item_id = "01SELFHEAL00000000000000"
+    body = " ".join(f"palavra{i}" for i in range(30)) + ".\n"
+    _inbox(home, "curar.md",
+          f"---\nid: {item_id}\ntitle: Curar\n"
+          f"conflicts_with: [{item_id}]\n---\n{body}")
+
+    curate_tick(home)
+
+    dest = next(home.library.glob("curar*.md"))
+    meta, _ = parse(dest.read_text())
+    assert "conflicts_with" not in meta

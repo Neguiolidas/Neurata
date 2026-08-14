@@ -1,6 +1,7 @@
-"""tests/test_migrate.py — cadeia de migração v7 → v8 → v9.
+"""tests/test_migrate.py — cadeia de migração v7 → v8 → v9 → v10.
 
-v8 = procedência curada (§5.2/§10); v9 = coluna `project` (§5.3).
+v8 = procedência curada (§5.2/§10); v9 = coluna `project` (§5.3);
+v10 = eixo de memória, com `edges` rechaveada de `rowid` pra `id`.
 
 Cada teste parte de um índice **forjado pela DDL histórica** (conftest),
 nunca de um índice novo com o `meta` adulterado: só a tabela de verdade
@@ -11,7 +12,12 @@ começa em v7 atravessa a cadeia inteira e por isso afirma
 import sqlite3
 
 import pytest
-from conftest import forge_v7_entries, insert_entry, set_index_version
+from conftest import (
+    forge_v7_entries,
+    forge_v9_edges,
+    insert_entry,
+    set_index_version,
+)
 
 from neurata import frontmatter, indexdb
 from neurata.deposit import deposit
@@ -401,7 +407,7 @@ def test_v9_fills_project_from_git_root(tmp_path):
     con.close()
     con = connect(home)
     try:
-        assert migrate_if_needed(con, home) == 9
+        assert migrate_if_needed(con, home) == INDEX_SCHEMA_VERSION
         assert _project(con, "c1") == "Neurata"
     finally:
         con.close()
@@ -502,3 +508,74 @@ def test_v9_is_atomic(tmp_path):
         ).fetchone()[0] == "8"
     finally:
         con.close()
+
+
+# ---------------------------------------------------------------- v9 → v10
+
+
+def _v9(tmp_path) -> "tuple[NeurataHome, sqlite3.Connection]":
+    """Índice v9 de verdade: `edges` chaveada por `rowid` (DDL histórica)."""
+    home = _home(tmp_path)
+    con = connect(home)
+    forge_v9_edges(con)
+    set_index_version(con, 9)
+    return home, con
+
+
+def _rowid(con: sqlite3.Connection, entry_id: str) -> int:
+    return con.execute("SELECT rowid FROM entries WHERE id=?",
+                       (entry_id,)).fetchone()[0]
+
+
+def test_v10_traduz_aresta_de_rowid_para_id(tmp_path):
+    """A aresta sobrevive à migração falando `id` em vez de `rowid`."""
+    home, con = _v9(tmp_path)
+    insert_entry(con, "a", "a", _write_grain(home, "a.md", "title: A\n"), "A")
+    insert_entry(con, "b", "b", _write_grain(home, "b.md", "title: B\n"), "B")
+    con.execute("INSERT INTO edges VALUES (?, ?)",
+                (_rowid(con, "a"), _rowid(con, "b")))
+    con.commit()
+
+    migrate_if_needed(con, home)
+
+    assert con.execute("SELECT src_id, dst_id FROM edges").fetchall() \
+        == [("a", "b")]
+
+
+def test_v10_descarta_aresta_pendurada(tmp_path):
+    """Ponta que não existe mais em `entries` não vira aresta órfã.
+
+    O `JOIN` limpa de graça o que a v9 deixaria apontando pro vazio.
+    """
+    home, con = _v9(tmp_path)
+    insert_entry(con, "a", "a", _write_grain(home, "a.md", "title: A\n"), "A")
+    con.execute("INSERT INTO edges VALUES (?, ?)", (_rowid(con, "a"), 4242))
+    con.commit()
+
+    migrate_if_needed(con, home)
+
+    assert con.execute("SELECT count(*) FROM edges").fetchone()[0] == 0
+
+
+def test_v10_nao_inventa_dado_no_eixo_de_memoria(tmp_path):
+    """As colunas novas nascem `NULL`: quem preenche é a re-derivação."""
+    home, con = _v9(tmp_path)
+    insert_entry(con, "a", "a", _write_grain(home, "a.md", "title: A\n"), "A")
+
+    migrate_if_needed(con, home)
+
+    assert con.execute("SELECT class, source_path, derived_hash FROM entries"
+                       " WHERE id='a'").fetchone() == (None, None, None)
+
+
+def test_v10_deixa_indice_indistinguivel_de_um_novo(tmp_path):
+    """Migrado e recém-criado convergem: mesma versão, mesmo `edges`."""
+    home, con = _v9(tmp_path)
+    migrate_if_needed(con, home)
+    novo = connect(_home(tmp_path / "outro"))
+
+    def forma(c: sqlite3.Connection) -> list:
+        return [(r[1], r[2]) for r in c.execute("PRAGMA table_info(edges)")]
+
+    assert forma(con) == forma(novo)
+    assert schema_state(con) == "current"

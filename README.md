@@ -53,11 +53,22 @@ neurata tick
 neurata query "term"
 neurata query "term regime:curated"   # facet: what the archive owns
                                       # (regime:mirror = synced from a source)
+neurata query "term class:procedural" # memory axis: how-to, as opposed to
+                                      # class:episodic (a dated event) and
+                                      # class:semantic (a fact)
 neurata query "term agent:hermes"     # provenance: who deposited it
                                       # (agent:/session:/origin:/project:,
                                       #  curated only)
 neurata query "term missing:agent"    # the gaps: curated grains with no agent
 neurata expand <id>          # card → summary → full
+
+# what the archive itself flags
+neurata shelf --conflicts    # near-duplicates and id/slug collisions
+
+# mirror an external source into the inbox (then `tick` catalogues it)
+neurata harvest                        # default provider: claude-code skills
+neurata harvest ~/some/dir             # or any directory, format auto-detected
+neurata harvest ~/rules --format rules # or pinned: skill-md, markdown, yaml, rules
 
 # archive health
 neurata doctor
@@ -74,17 +85,32 @@ neurata --version
 
 `neurata doctor` warns (`last-tick`) if the cron stops.
 
-`tick` also absorbs edits: fix a grain's body in your editor and the next
-tick re-hashes it into the index, keeping its id, slug and provenance.
+`tick` also absorbs edits: fix a grain's **body** in your editor and the
+next tick re-hashes it into the index, keeping its id, slug and
+provenance. Editing only the frontmatter (`class:`, `type:`, `tags:`)
+leaves the body unchanged, so the tick sees nothing to absorb — run
+`neurata reindex` after those.
 
 **Principles**
+
+- Grains sit on two independent axes. **Regime** — who owns the grain —
+  is derived from the file's shape, never authored: a grain carrying a
+  `source_key` is a `mirror` of some external source, everything else is
+  `curated`. **Class** — what kind of memory it is — is declared in the
+  frontmatter (`class: episodic | semantic | procedural`); a curated
+  grain without one is `episodic`, because a deposit is a dated event.
+  A mirror's class is written by the harvest from the file's shape — a
+  skill or a rules file is `procedural`, prose and YAML are `semantic` —
+  and a shape the adapter doesn't know declares nothing at all. Neither
+  axis is ever guessed from the text, and `neurata query "missing:class"`
+  lists the grains that predate the declaration.
 
 - Files are the truth (a valid Obsidian vault); the index is a disposable cache.
 - Deterministic retrieval first; LLMs only where explicitly wanted.
 - Nothing is ever destroyed: archive + quarantine, never delete.
 - Zero runtime dependencies. Python ≥ 3.10.
 
-**Status:** v1.2.0. The 1.0 gate was dogfooding, not a version number:
+**Status:** v1.3.0. The 1.0 gate was dogfooding, not a version number:
 `neurata doctor` measures it, and it cleared at 12 distinct days of real
 use inside a 14-day window.
 

@@ -6,6 +6,61 @@ v0.4–v0.7 shipped under the 0.8.0 release. None of the 0.x versions was
 ever tagged or uploaded anywhere — they are development history, kept
 for the record. For anyone installing the package, 1.0.0 is the history.
 
+## [1.3.0] - 2026-08-13
+
+An archive that only knows *where* a grain came from cannot tell a dated
+event from a durable fact. 1.3 adds the axis it was missing — and it is
+declared in the file, never guessed from the text.
+
+### Added
+- **Memory axis**: every grain carries a `class:` — `episodic` (a dated
+  event), `semantic` (a fact about the world) or `procedural` (how to do
+  something). Precedence is **explicit declaration > regime default**,
+  derived in one place for every write path (`tick` and `reindex`), so
+  the index cannot invent a class the file does not have.
+- A curated grain with nothing declared is `episodic`, anchored on
+  `created`, which every deposit has: a deposit is a dated event, and a
+  dated event is episodic memory. That is form, not text heuristics.
+- Mirrors carry the `class:` the harvest wrote, because the adapter is
+  what knows which shape it read. A skill is `procedural` because it was
+  read as a skill — auditable by opening the file, not knowledge hidden
+  in the code.
+- `class:` is a query facet, with `missing:class` for the gaps:
+  `neurata query "deploy class:procedural"`. Its domain is closed, so a
+  typo is a usage error listing the valid classes, never an empty list:
+  `class:procedual` returning nothing would read as "I have no
+  procedural memory" when what does not exist is the word.
+- `shelf --conflicts` now also lists near-duplicates found by `tick`
+  (`conflicts_with`), not only `id`/`slug` collisions.
+
+### Changed
+- Index schema v9 → v10 opens three columns (`class`, `source_path`,
+  `derived_hash`) and runs **zero `UPDATE`**: they are born `NULL` and
+  filled by re-derivation (harvest → tick → reindex). Reading 15 k files
+  inside a migration would be a second implementation of the derivation,
+  free to drift from the first. Measured here at 45–64 ms over 14,979
+  grains (three runs).
+- `edges` is **re-keyed** from `rowid` to `id`, with its contents
+  translated by a `JOIN` inside the bank — never dropped. The `rowid` was
+  unsafe because the tick's update-in-place deletes and reinserts: SQLite
+  recycles the number and the edge would silently point at whichever
+  grain inherited it. Dropping instead of translating would have left the
+  graph signal out of `query`'s ranking until the next reindex, in
+  silence. On a synthetic 60 k-edge index the translation costs 1.2 s and
+  preserves all 59,991 edges; the archive here has an empty `edges`, so
+  its own migration pays nothing for this.
+- A grain no longer conflicts with itself. An item already indexed in the
+  inbox escaped the exact-dedup (which only looks at `location='library'`)
+  and came back as a near-dup against itself at jaccard 1.0. The tick now
+  skips it in the loop **and** heals the self-reference already written to
+  disk; `shelf --conflicts` filters it out for grains written by < 1.3.
+
+### Fixed
+- `class:` was never written to the index. Both write paths declared the
+  column and neither passed the value, so the facet answered nothing while
+  the files carried the datum. Caught by a real smoke, not by the suite —
+  the tests asserted the derivation, and the derivation was right.
+
 ## [1.2.0] - 2026-08-13
 
 The provenance facets of 1.1.0 had no data to filter: nothing ever wrote

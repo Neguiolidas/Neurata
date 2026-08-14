@@ -72,3 +72,24 @@ def test_apply_boost_beta_zero_desliga():
 
 def test_apply_boost_lista_vazia_nao_lanca():
     shelf.apply_boost([], beta=0.15)
+
+
+def test_conflicts_ignores_self_reference(tmp_path):
+    """Grão nunca conflita consigo mesmo (dado gravado por versões < 1.3)."""
+    from neurata.home import NeurataHome
+
+    home = NeurataHome(tmp_path)
+    home.init()
+    (home.library / "solo.md").write_text(
+        "---\nid: 01SELF0000000000000000A\ntitle: Solo\n"
+        "conflicts_with: [01SELF0000000000000000A]\n---\ncorpo\n",
+        encoding="utf-8")
+    (home.library / "par.md").write_text(
+        "---\nid: 01PAR00000000000000000B\ntitle: Par\n"
+        "conflicts_with: [01SELF0000000000000000A]\n---\noutro corpo\n",
+        encoding="utf-8")
+
+    result = shelf.conflicts(home)
+
+    paths = [c["path"] for c in result["conflicts_with"]]
+    assert paths == ["library/par.md"]

@@ -12,8 +12,24 @@ ITERS = 10
 
 
 def load_adjacency(con: sqlite3.Connection) -> dict[int, set[int]]:
+    """Carrega a adjacência em espaço de `rowid`, traduzindo do `id` com
+    que `edges` é persistida.
+
+    A tabela é chaveada por `id` porque `rowid` é reciclado: o
+    update-in-place do `tick` apaga e reinsere, e uma aresta guardada por
+    `rowid` passaria a apontar para o grão que herdou o número. O ranking,
+    porém, é todo em `rowid` (é a chave do FTS) — então a tradução mora
+    aqui, na fronteira, e o PPR nunca fica sabendo.
+
+    O JOIN é a defesa que fecha o ciclo: aresta cuja ponta não existe mais
+    simplesmente não entra, em vez de ressuscitar via `rowid` reciclado.
+    """
     adj: dict[int, set[int]] = {}
-    for src, dst in con.execute("SELECT src_rowid, dst_rowid FROM edges"):
+    rows = con.execute(
+        "SELECT s.rowid, d.rowid FROM edges e"
+        " JOIN entries s ON s.id = e.src_id"
+        " JOIN entries d ON d.id = e.dst_id")
+    for src, dst in rows:
         adj.setdefault(src, set()).add(dst)
         adj.setdefault(dst, set()).add(src)
     return adj

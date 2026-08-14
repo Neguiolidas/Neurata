@@ -17,6 +17,7 @@ from neurata.frontmatter import FrontmatterError, parse, serialize
 from neurata.home import NeurataHome
 from neurata.indexdb import check_schema, connect, migrate_if_needed
 from neurata.providers import GENERIC, REGISTRY, resolve
+from neurata.providers.formats import FORMAT_CLASS
 from neurata.ulid import new_ulid
 
 __all__ = ["GENERIC", "REGISTRY", "HarvestReport", "harvest", "validate_target"]
@@ -256,6 +257,13 @@ def _emit_item(home: NeurataHome, target: str, skill, source_key: str,
         "created": now,
         "content_hash": body_hash,
     }
+    # A classe do espelho é declarada pela forma que o adapter leu, e o
+    # frontmatter do espelho é onde ela fica auditável. Item sem `fmt`
+    # (provider de fora da árvore) ou formato fora do mapa não vira
+    # palpite: nasce sem `class:` e cai em `missing:class`.
+    memory_class = FORMAT_CLASS.get(getattr(skill, "fmt", ""))
+    if memory_class:
+        meta["class"] = memory_class
     from neurata.textnorm import slugify
     slug = slugify(skill.name)
     path = home.inbox / f"{entry_id}-{slug}.md"

@@ -6,6 +6,8 @@ harvest → tick → query, update in-place, tombstone→stale, idempotência.
 import json
 
 from neurata.cli import main
+from neurata.home import NeurataHome
+from neurata.indexdb import connect
 
 
 def _write_skill(base, dirname, name, description, body):
@@ -118,3 +120,70 @@ def test_harvest_tick_query_end_to_end(tmp_path, monkeypatch, capsys):
     assert out["result"]["updated"] == 0
     assert out["result"]["removed"] == 0
     assert list(home_dir.joinpath("inbox").glob("*.md")) == []
+
+
+def test_harvest_declara_classe_ate_o_indice(tmp_path, monkeypatch, capsys):
+    """Regressao: o adapter declara a classe e ela sobrevive espelho->tick->indice.
+
+    O bug de 1.3.0-dev: harvest escrevia o espelho sem `class:`, o tick caia no
+    default `episodic` e o eixo de memoria ficava errado justo para o material
+    colhido. Cobre skill (procedural) e markdown generico (semantic).
+    """
+    home_dir = tmp_path / "home"
+    skills_dir = tmp_path / "skills"
+    docs_dir = tmp_path / "docs"
+    skills_dir.mkdir()
+    docs_dir.mkdir()
+    monkeypatch.setenv("NEURATA_HOME", str(home_dir))
+    monkeypatch.setenv("NEURATA_CLAUDE_SKILLS_DIR", str(skills_dir))
+
+    _write_skill(skills_dir, "deploy", "deploy-do-servico",
+                 "passo a passo de deploy",
+                 "# Deploy\n1. build\n2. publica\n")
+    (docs_dir / "regra.md").write_text(
+        "# regra de retencao\n\n"
+        "Logs de auditoria ficam retidos por 90 dias.\n", encoding="utf-8")
+
+    assert main(["harvest", "claude-code", "--json"]) == 0
+    capsys.readouterr()
+    assert main(["harvest", str(docs_dir), "--json"]) == 0
+    capsys.readouterr()
+
+    # 1. o espelho no inbox ja nasce com a classe declarada
+    inbox = sorted(home_dir.joinpath("inbox").glob("*.md"))
+    assert len(inbox) == 2
+    classes_inbox = set()
+    for f in inbox:
+        for line in f.read_text(encoding="utf-8").splitlines():
+            if line.startswith("class:"):
+                classes_inbox.add(line.split(":", 1)[1].strip())
+    assert classes_inbox == {"procedural", "semantic"}
+
+    # 2. o tick preserva a classe no arquivo da library (nao sobrescreve
+    #    com o default episodic)
+    assert main(["tick", "--json"]) == 0
+    capsys.readouterr()
+    por_classe = {}
+    for f in home_dir.joinpath("library").glob("*.md"):
+        text = f.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if line.startswith("class:"):
+                por_classe.setdefault(line.split(":", 1)[1].strip(), []).append(f.name)
+    assert sorted(por_classe) == ["procedural", "semantic"]
+
+    # 3. e a classe chega ao indice, que e o que a query filtra
+    home = NeurataHome(home_dir)
+    con = connect(home)
+    try:
+        rows = dict(con.execute(
+            "SELECT title, class FROM entries WHERE class IS NOT NULL"))
+    finally:
+        con.close()
+    assert rows.get("deploy-do-servico") == "procedural"
+    assert rows.get("regra de retencao") == "semantic"
+
+    # 4. e a query por classe encontra so o material certo
+    assert main(["query", "class:procedural deploy", "--json"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    titles = [c["title"] for c in out["result"]["results"]]
+    assert titles == ["deploy-do-servico"]

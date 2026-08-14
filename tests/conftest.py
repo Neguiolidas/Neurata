@@ -59,3 +59,22 @@ def insert_entry(con: sqlite3.Connection, entry_id: str, slug: str,
     con.execute(f"INSERT INTO entries({names}) VALUES ({marks})",
                 tuple(cols.values()))
     con.commit()
+
+
+_V9_EDGES = """
+CREATE TABLE edges(
+  src_rowid INTEGER NOT NULL,
+  dst_rowid INTEGER NOT NULL,
+  PRIMARY KEY(src_rowid, dst_rowid)
+);
+"""
+
+
+def forge_v9_edges(con: sqlite3.Connection) -> None:
+    """Substitui `edges` pela DDL da v9, chaveada por `rowid`.
+
+    Sem isto um "índice v9" de teste é só a DDL corrente com o carimbo
+    trocado — e a tradução `rowid` → `id` nunca seria exercida.
+    """
+    con.executescript("DROP TABLE IF EXISTS edges;" + _V9_EDGES)
+    con.commit()

@@ -27,6 +27,7 @@ from neurata.indexdb import (
     IndexLock,
     connect,
     create_schema,
+    class_of,
     drop_schema,
     fts_insert,
     project_of,
@@ -59,6 +60,11 @@ def _reindex_locked(home: NeurataHome, con: sqlite3.Connection) -> dict:
     by_title: dict[str, int] = {}
     by_alias: dict[str, int] = {}
     bodies: dict[int, str] = {}
+    # A resolução de link acontece em `rowid` (é a chave dos mapas e do
+    # FTS); `edges` guarda `id`, que não é reciclado. Este mapa é a
+    # tradução, aplicada só na fronteira do INSERT — o espelho do JOIN em
+    # `linkgraph.load_adjacency`.
+    id_of: dict[int, str] = {}
     old_grains = _grains_snapshot(con)
     drop_schema(con)
     create_schema(con)
@@ -90,6 +96,7 @@ def _reindex_locked(home: NeurataHome, con: sqlite3.Connection) -> dict:
             rowid = _insert(con, meta, body, rel, location, slug,
                              old_grains)
             indexed += 1
+            id_of[rowid] = str(meta["id"])
             by_slug[slug] = rowid
             _map_put(by_title, str(meta.get("title", slug)).lower(),
                      rowid)
@@ -106,7 +113,7 @@ def _reindex_locked(home: NeurataHome, con: sqlite3.Connection) -> dict:
             elif dst != src:
                 cur = con.execute(
                     "INSERT OR IGNORE INTO edges VALUES (?,?)",
-                    (src, dst))
+                    (id_of[src], id_of[dst]))
                 edges += cur.rowcount
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     con.execute(
@@ -195,9 +202,9 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
-        " grain_quality, shingles, source_key, regime,"
+        " grain_quality, shingles, source_key, regime, class,"
         " agent, session, origin)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
          title, description,
@@ -205,7 +212,7 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
          str(meta.get("created", "")), str(meta.get("updated",
                                                     meta.get("created", ""))),
          grain_quality, shingles_json, meta.get("source_key"),
-         regime_of(meta), *provenance(meta)))
+         regime_of(meta), class_of(meta), *provenance(meta)))
     rowid = cur.lastrowid
     assert rowid is not None  # INSERT sempre popula lastrowid
     fts_insert(con, rowid, regime_of(meta), title=title, aliases=aliases_text,

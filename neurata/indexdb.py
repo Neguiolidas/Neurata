@@ -21,8 +21,10 @@ _REMEDY = (
 # Versão do schema do ÍNDICE (meta 'index_schema_version'); distinta do
 # SCHEMA_VERSION do config em home.py. Reindex e migração gravam;
 # check_schema (público) checa — v8: colunas de procedência
-# (`agent`/`session`/`origin`) sobre a v7 (coluna `regime` + `curated_fts`).
-INDEX_SCHEMA_VERSION = 9
+# (`agent`/`session`/`origin`) sobre a v7 (coluna `regime` + `curated_fts`);
+# v10: eixo de memória (`class`), origem do link (`source_path`), invalidação
+# da derivação (`derived_hash`) e `edges` rechaveada por `id`.
+INDEX_SCHEMA_VERSION = 10
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -33,9 +35,9 @@ CREATE TABLE IF NOT EXISTS entry_tags(
 );
 CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag);
 CREATE TABLE IF NOT EXISTS edges(
-  src_rowid INTEGER NOT NULL,
-  dst_rowid INTEGER NOT NULL,
-  PRIMARY KEY(src_rowid, dst_rowid)
+  src_id TEXT NOT NULL,
+  dst_id TEXT NOT NULL,
+  PRIMARY KEY(src_id, dst_id)
 );
 CREATE TABLE IF NOT EXISTS grains(
   entry_id TEXT NOT NULL,
@@ -65,7 +67,10 @@ CREATE TABLE IF NOT EXISTS entries(
          CHECK(regime IN ('mirror', 'curated')),
   agent TEXT,
   session TEXT,
-  origin TEXT
+  origin TEXT,
+  class TEXT,
+  source_path TEXT,
+  derived_hash TEXT
 );
 """
 
@@ -83,8 +88,21 @@ CREATE TABLE IF NOT EXISTS entries(
 # índice sobre coluna nova falharia com OperationalError dentro de
 # `connect()` — inclusive no `reindex`, o único comando capaz de consertar.
 # Índice sobre tabela legada não tem uso: `reindex` a derruba e recria.
+# Cada índice viaja com a coluna que ele exige: a guarda é por índice, não
+# por uma coluna-sentinela única. Com sentinela, o índice novo (v10) rodaria
+# sobre uma `entries` v9 — que tem a sentinela mas não a coluna nova — e
+# derrubaria `connect()` para TODO comando, inclusive o `reindex` que
+# consertaria. A regra se mantém sozinha quando a próxima coluna chegar.
 _ENTRIES_INDEXES = (
-    "CREATE INDEX IF NOT EXISTS idx_entries_regime ON entries(regime)",
+    ("regime",
+     "CREATE INDEX IF NOT EXISTS idx_entries_regime ON entries(regime)"),
+    # Resolução de link markdown: igualdade de alta seletividade, uma
+    # consulta por link candidato. Sem índice em `class` de propósito —
+    # 3 valores em ~15k linhas, o planner descarta e o filtro sempre
+    # acompanha um pool de FTS.
+    ("source_path",
+     "CREATE INDEX IF NOT EXISTS idx_entries_source_path"
+     " ON entries(source_path)"),
 )
 
 _FTS = ("CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5("
@@ -129,10 +147,16 @@ def entry_purge(con: sqlite3.Connection, rowid: int, entry_id: str) -> None:
     Ponto único de remoção. `curated_fts` sem a linha é no-op, então não
     precisa checar regime. Sem isto seriam quatro DELETEs copiados em três
     pontos do `tick`, e o esquecido viraria grão fantasma: some da
-    biblioteca, continua respondendo na busca."""
+    biblioteca, continua respondendo na busca.
+
+    `edges` é chaveada por `id` (imutável) e apagada nas **duas** direções:
+    o SQLite reaproveita `rowid`, então aresta órfã ressuscitaria apontando
+    para um grão sem relação nenhuma com o original."""
     con.execute("DELETE FROM entries_fts WHERE rowid=?", (rowid,))
     con.execute("DELETE FROM curated_fts WHERE rowid=?", (rowid,))
     con.execute("DELETE FROM entry_tags WHERE entry_rowid=?", (rowid,))
+    con.execute("DELETE FROM edges WHERE src_id=? OR dst_id=?",
+                (entry_id, entry_id))
     con.execute("DELETE FROM entries WHERE id=?", (entry_id,))
 
 
@@ -146,6 +170,43 @@ def regime_of(meta: dict) -> str:
     índice e arquivo discordarem.
     """
     return "mirror" if meta.get("source_key") else "curated"
+
+
+CLASSES = ("episodic", "semantic", "procedural")
+
+
+def class_of(meta: dict) -> "str | None":
+    """Eixo de memória do grão — declarado no arquivo, nunca inferido do
+    texto. Ponto único de derivação, mesmo pacto do `regime_of`: todo
+    caminho de escrita do índice (tick e reindex) passa por aqui, então
+    nenhum deles pode inventar uma classe que o arquivo não tem.
+
+    Ponto único não é frescor: o detector de edição manual do tick é
+    `sha256(body)`, então declarar `class:` num grão já catalogado, na
+    mão, não muda o corpo e o índice segue com a classe anterior até o
+    próximo `reindex` (mesmo limite de `type:`, `env:` e `tags:`, que é
+    onde ele está documentado).
+
+    Precedência: **declaração explícita > default do regime**. O espelho
+    carrega `class:` escrito pelo harvest (o adapter sabe que forma leu),
+    então sua classe é auditável abrindo o arquivo, não conhecimento
+    escondido no código.
+
+    Curado sem declaração é `episodic` por ancoragem em `created`, que é
+    obrigatório em todo depósito: um depósito é um evento datado, e evento
+    datado é memória episódica. É forma, não heurística de texto.
+
+    Valor fora do domínio vira `None`, não erro — frontmatter é entrada não
+    confiável, e um grão com `class: banana` não pode derrubar um tick de
+    14 mil itens."""
+    declared = meta.get("class")
+    if declared in CLASSES:
+        return str(declared)
+    if declared:
+        return None
+    if meta.get("source_key"):
+        return None
+    return "episodic"
 
 
 def provenance(meta: dict) -> "tuple[str | None, str | None, str | None]":
@@ -290,10 +351,19 @@ def create_schema(con: sqlite3.Connection) -> None:
     con.executescript(_SCHEMA)
     con.execute(_FTS)
     con.execute(_CURATED_FTS)
-    if "regime" in entries_columns(con):
-        for ddl in _ENTRIES_INDEXES:
-            con.execute(ddl)
+    apply_entries_indexes(con)
     con.commit()
+
+
+def apply_entries_indexes(con: sqlite3.Connection) -> None:
+    """Cria os índices de `entries` cuja coluna já existe. Ponto único:
+    `create_schema` chama na abertura, a migração chama depois do ALTER —
+    duas cópias da mesma DDL é como um caminho ganha índice e o outro não.
+    Não commita; quem chama decide a fronteira da transação."""
+    cols = entries_columns(con)
+    for col, ddl in _ENTRIES_INDEXES:
+        if col in cols:
+            con.execute(ddl)
 
 
 def schema_state(con: sqlite3.Connection) -> str:
@@ -514,7 +584,87 @@ def _grain_project(home: NeurataHome, path: str) -> "str | None":
     return project_of(meta)
 
 
-_MIGRATIONS = {7: _v7_to_v8, 8: _v8_to_v9}
+_V10_COLS = ("class", "source_path", "derived_hash")
+
+
+_EDGES_DDL = ("CREATE TABLE edges("
+              "src_id TEXT NOT NULL, dst_id TEXT NOT NULL,"
+              " PRIMARY KEY(src_id, dst_id))")
+
+
+def _to_id_keyed_edges(con: sqlite3.Connection) -> None:
+    """Passa `edges` de `rowid` pra `id`, preservando as arestas.
+
+    Decide pela forma real da tabela, não pelo carimbo de versão: um
+    índice pode estar carimbado v9 já com a DDL corrente (é o que faz
+    `set_index_version` num banco novo), e reescrever cegamente perderia
+    aresta ou estouraria em coluna inexistente. As três formas possíveis
+    e o que cada uma pede:
+
+    - `src_rowid`: forma v9 de verdade — traduz via `JOIN` com `entries`.
+    - `src_id`: já é a forma nova — não toca, migração é idempotente.
+    - ausente: índice sem a tabela — cria vazia.
+    """
+    cols = {row[1] for row in con.execute("PRAGMA table_info(edges)")}
+    if "src_id" in cols:
+        return
+    if not cols:
+        con.execute(_EDGES_DDL)
+        return
+    con.execute("ALTER TABLE edges RENAME TO edges_v9")
+    con.execute(_EDGES_DDL)
+    con.execute("INSERT OR IGNORE INTO edges(src_id, dst_id)"
+                " SELECT s.id, d.id FROM edges_v9 e"
+                " JOIN entries s ON s.rowid = e.src_rowid"
+                " JOIN entries d ON d.rowid = e.dst_rowid")
+    con.execute("DROP TABLE edges_v9")
+
+
+def _v9_to_v10(con: sqlite3.Connection, home: NeurataHome) -> None:
+    """v9 → v10: abre espaço para o eixo de memória. **Zero `UPDATE`.**
+
+    As três colunas nascem `NULL` e quem as preenche é a re-derivação
+    (harvest → tick → reindex), pela mesma regra do caminho de escrita:
+    migração não inventa dado. Ler 15k arquivos aqui seria uma segunda
+    implementação da derivação, livre para divergir da primeira.
+
+    `edges` **muda de chave** (`rowid` → `id`) com o conteúdo traduzido,
+    não descartado. O `rowid` deixa de servir porque o update-in-place do
+    tick apaga e reinsere: o número é reciclado e a aresta passaria a
+    apontar pro grão que o herdou; o `id` é estável.
+
+    Traduzir é obrigação, não zelo. `edges` está **populada** em todo
+    índice desde a v0.2, e o PPR de `query` já a lia na v1.2 — dropar
+    devolveria ranking sem sinal de grafo até o próximo reindex, em
+    silêncio. Isso contradiria quem chama esta função: `query._migrate`
+    migra em linha justamente pra "ninguém ser mandado rodar `reindex`
+    por uma migração de segundos".
+
+    A tradução não viola "migração não inventa dado": é `JOIN` com
+    `entries` dentro do próprio banco, não uma segunda implementação da
+    resolução de links — nada é relido do disco. O `JOIN` ainda limpa de
+    graça a aresta cuja ponta já não existe. Tudo na mesma transação, sob
+    o lock: falha no meio deixa o banco v9 inteiro.
+
+    `home` não é usado — v10 não lê o disco, e é justamente esse o ponto.
+    """
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        existing = entries_columns(con)
+        for col in _V10_COLS:
+            if col not in existing:
+                con.execute(f"ALTER TABLE entries ADD COLUMN {col} TEXT")
+        _to_id_keyed_edges(con)
+        apply_entries_indexes(con)
+        con.execute("INSERT OR REPLACE INTO meta VALUES"
+                    " ('index_schema_version', '10')")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
+_MIGRATIONS = {7: _v7_to_v8, 8: _v8_to_v9, 9: _v9_to_v10}
 
 
 def load_shingle_sets(con: sqlite3.Connection) -> "dict[str, frozenset]":

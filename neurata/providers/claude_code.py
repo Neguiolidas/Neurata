@@ -14,10 +14,17 @@ from neurata.frontmatter import FrontmatterError, parse
 
 @dataclass(frozen=True)
 class Skill:
+    """Item colhido do Claude Code. `fmt` é o mesmo campo de
+    `generic.Scanned`: um SKILL.md é a forma que o adapter `skill-md` lê,
+    e é ele que declara a classe do espelho. Fixo por contrato, não por
+    default de conveniência — um provider que passe a ler outra forma
+    muda este valor junto, e o harvest não precisa adivinhar."""
+
     name: str
     description: str
     body: str
     source_path: str
+    fmt: str = "skill-md"
 
 
 @dataclass(frozen=True)

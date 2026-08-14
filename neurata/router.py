@@ -11,7 +11,7 @@ from neurata.textnorm import normalize
 
 _FACET = re.compile(
     r"(?:^|(?<=\s))"
-    r"(type|tag|env|project|regime|agent|session|origin):(\S+)")
+    r"(type|tag|env|project|regime|class|agent|session|origin):(\S+)")
 _MISSING = re.compile(r"(?:^|(?<=\s))missing:(\S+)")
 _PHRASE = re.compile(r'"([^"]+)"')
 _SKILL = re.compile(r"\bcomo fa[çc]o\b|\bhow do i\b", re.IGNORECASE)

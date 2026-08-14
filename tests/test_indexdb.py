@@ -158,11 +158,12 @@ def test_create_schema_has_source_key_column(tmp_path):
     assert "source_key" in column_names
 
 
-def test_index_schema_version_is_9():
-    """v9 = coluna `project`, derivada do frontmatter. Literal de
-    propósito: o número é contrato com índices no disco, então subir a
-    constante tem que quebrar um teste e forçar um passo de migração."""
-    assert INDEX_SCHEMA_VERSION == 9
+def test_index_schema_version_is_10():
+    """v10 = `edges` chaveada por `id` em vez de `rowid`, que é reciclado
+    pelo update-in-place do tick. Literal de propósito: o número é
+    contrato com índices no disco, então subir a constante tem que
+    quebrar um teste e forçar um passo de migração."""
+    assert INDEX_SCHEMA_VERSION == 10
 
 
 def test_create_schema_has_project_column(tmp_path):

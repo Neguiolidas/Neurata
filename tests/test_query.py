@@ -217,6 +217,27 @@ def test_missing_unknown_key_errors_listing_valid(tmp_path):
         assert key in msg
 
 
+def test_class_outside_domain_errors_listing_valid(tmp_path):
+    """Vazio aqui mentiria: o usuário leria "não tenho memória procedural"
+    quando o que não existe é a classe que ele digitou."""
+    with pytest.raises(QueryError) as exc:
+        query(_setup_prov(tmp_path), "class:procedual")
+    msg = str(exc.value)
+    assert "procedual" in msg
+    for cls in ("episodic", "semantic", "procedural"):
+        assert cls in msg
+
+
+def test_class_in_domain_is_not_an_error(tmp_path):
+    for cls in ("episodic", "semantic", "procedural"):
+        query(_setup_prov(tmp_path), f"class:{cls}")
+
+
+def test_open_domain_facet_stays_silent(tmp_path):
+    """`type:` é domínio aberto — vazio ali é resposta, não erro."""
+    assert query(_setup_prov(tmp_path), "type:banana")["results"] == []
+
+
 def test_missing_with_mirror_regime_errors(tmp_path):
     """Mirror não tem procedência: pedir a lacuna dele é erro de uso,
     não uma lista vazia que o usuário leria como 'está tudo curado'."""
@@ -233,3 +254,99 @@ def test_empty_query_message_lists_new_facets(tmp_path):
     with pytest.raises(QueryError) as exc:
         query(_home(tmp_path), "   ")
     assert "agent:" in str(exc.value)
+
+
+# ---- v1.3: faceta class: + missing:class --------------------------------
+
+def _setup_class(tmp_path):
+    """Fixture do eixo de memória: as quatro origens possíveis de `class`.
+
+    Declarado válido, default por forma (curado sem declaração), declarado
+    fora do domínio e espelho sem declaração — os dois últimos são NULL, e
+    é essa a lacuna que `missing:class` existe para achar.
+    """
+    home = _home(tmp_path)
+    _write(home, "regra", ["id: 03A", "title: Regra", "class: semantic"],
+           "Deploy exige duas aprovações.\n")
+    _write(home, "receita", ["id: 03B", "title: Receita",
+                             "class: procedural"],
+           "Deploy: rodar o script e conferir.\n")
+    _write(home, "evento", ["id: 03C", "title: Evento"],
+           "Deploy do serviço falhou ontem.\n")
+    _write(home, "banana", ["id: 03D", "title: Banana", "class: banana"],
+           "Deploy com classe fora do domínio.\n")
+    _write(home, "espelho-mudo",
+           ["id: 03E", "title: Espelho mudo", "source_key: claude-code:y"],
+           "Deploy espelhado sem classe declarada.\n")
+    _write(home, "espelho-skill",
+           ["id: 03F", "title: Espelho skill", "source_key: claude-code:z",
+            "class: procedural"],
+           "Deploy espelhado que o adapter classificou.\n")
+    reindex(home)
+    return home
+
+
+def test_class_facet_filters_across_regimes(tmp_path):
+    """`class:` é eixo de memória, não de procedência: cruza os regimes.
+
+    Espelho entra — diferente de `agent:`, que é NULL no espelho por
+    construção. Se este teste virar {"receita"}, alguém copiou a regra
+    errada de faceta.
+    """
+    home = _setup_class(tmp_path)
+    assert _slugs(query(home, "class:procedural")) == {"receita",
+                                                       "espelho-skill"}
+    assert _slugs(query(home, "class:semantic")) == {"regra"}
+
+
+def test_class_default_by_form_is_queryable(tmp_path):
+    """Curado sem declaração é episódico por ancoragem em `created`."""
+    assert _slugs(query(_setup_class(tmp_path), "class:episodic")) == {
+        "evento"}
+
+
+def test_class_facet_composes_with_text(tmp_path):
+    res = query(_setup_class(tmp_path), "aprovações class:semantic")
+    assert _slugs(res) == {"regra"}
+
+
+def test_missing_class_finds_both_regimes(tmp_path):
+    """Valor fora do domínio e espelho mudo são a mesma lacuna: NULL.
+
+    Ao contrário de `missing:agent`, esta não é restrita ao curado — no
+    espelho, classe nula é adapter que não declarou, lacuna de verdade.
+    """
+    assert _slugs(query(_setup_class(tmp_path), "missing:class")) == {
+        "banana", "espelho-mudo"}
+
+
+def test_missing_class_with_mirror_regime_is_not_an_error(tmp_path):
+    """A guarda de `regime:mirror` é da procedência, não do eixo."""
+    res = query(_setup_class(tmp_path), "missing:class regime:mirror")
+    assert _slugs(res) == {"espelho-mudo"}
+
+
+def test_missing_agent_still_rejects_mirror_when_class_also_asked(tmp_path):
+    """Uma chave de procedência na lista basta para o erro valer."""
+    with pytest.raises(QueryError) as exc:
+        query(_setup_class(tmp_path), "missing:class missing:agent"
+              " regime:mirror")
+    assert "agent" in str(exc.value)
+
+
+def test_missing_unknown_key_lists_class_too(tmp_path):
+    with pytest.raises(QueryError) as exc:
+        query(_setup_class(tmp_path), "missing:xpto")
+    assert "class" in str(exc.value)
+
+
+def test_class_partitions_the_acervo(tmp_path):
+    """|class:*| + |missing:class| == acervo, sem sobra nem sobreposição."""
+    home = _setup_class(tmp_path)
+    com = set()
+    for c in ("episodic", "semantic", "procedural"):
+        com |= _slugs(query(home, f"class:{c}"))
+    sem = _slugs(query(home, "missing:class"))
+    assert com.isdisjoint(sem)
+    assert com | sem == {"regra", "receita", "evento", "banana",
+                         "espelho-mudo", "espelho-skill"}

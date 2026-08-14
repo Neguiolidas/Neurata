@@ -42,10 +42,11 @@ def query(home: NeurataHome, qstr: str, limit: int = 10) -> dict:
     # antes do check de vazia: `missing:xpto` sozinho tem has_facets e
     # cairia em "query vazia", escondendo o erro que o usuário precisa ver.
     _validate_missing(parsed)
+    _validate_class(parsed)
     if not parsed.has_text and not parsed.has_facets:
         raise QueryError(
             "query vazia — passe texto e/ou facets (type:/tag:/env:/"
-            "project:/regime:/agent:/session:/origin:/missing:)")
+            "project:/regime:/class:/agent:/session:/origin:/missing:)")
     _ensure_searchable(home)
     con = connect(home)
     try:
@@ -146,33 +147,61 @@ _MISSING_CLAUSE = {
     col: f"(e.{col} IS NULL AND e.regime = 'curated')"
     for col in indexdb.PROVENANCE_COLS
 }
+# `class` foge da regra do curado de propósito: classe nula é lacuna real
+# nos dois regimes — espelho cujo adapter não declarou `class:` e grão com
+# valor fora do domínio caem os dois em NULL. Restringir ao curado aqui
+# esconderia justamente o caso que o usuário precisa achar.
+_MISSING_CLAUSE["class"] = "e.class IS NULL"
+_MISSING_KEYS = (*indexdb.PROVENANCE_COLS, "class")
 
 
 def _validate_missing(parsed: router.ParsedQuery) -> None:
-    """`missing:` só faz sentido sobre as colunas de procedência do curado.
+    """`missing:` só cobre as lacunas que o índice sabe rastrear.
 
-    Chave desconhecida e `regime:mirror` são erros de uso, não listas
-    vazias: espelho é NULL nas três por construção, e devolver [] ali
-    diria ao usuário "não há lacunas" quando são todas lacuna.
+    Chave desconhecida é erro de uso, não lista vazia. `regime:mirror` é
+    erro só para as colunas de procedência: espelho é NULL nas três por
+    construção, e devolver [] ali diria "não há lacunas" quando são todas
+    lacuna. `missing:class` sobrevive no espelho porque lá classe nula é
+    lacuna de verdade — adapter que não declarou.
     """
     if not parsed.missing:
         return
-    validas = ", ".join(indexdb.PROVENANCE_COLS)
+    validas = ", ".join(_MISSING_KEYS)
     for key in parsed.missing:
-        if key not in indexdb.PROVENANCE_COLS:
+        if key not in _MISSING_CLAUSE:
             raise QueryError(
                 f"missing:{key} não é uma lacuna rastreada — "
                 f"chaves válidas: {validas}")
     if parsed.facets.get("regime") == "mirror":
-        raise QueryError(
-            "missing: descreve lacunas de procedência do regime curado; "
-            "grão espelhado não tem procedência por construção")
+        proc = [k for k in parsed.missing if k in indexdb.PROVENANCE_COLS]
+        if proc:
+            raise QueryError(
+                f"missing:{proc[0]} descreve lacuna de procedência do "
+                "regime curado; grão espelhado não tem procedência por "
+                "construção")
+
+
+def _validate_class(parsed: router.ParsedQuery) -> None:
+    """Classe é domínio fechado: valor fora dele é erro de uso.
+
+    Mesma regra do `missing:`, e pela mesma razão. `class:procedual` só
+    pode devolver lista vazia, e lista vazia aqui mente: o usuário lê
+    "não tenho memória procedural" quando o que não existe é a classe
+    que ele digitou. Facet de domínio aberto (`type:`, `tag:`) fica de
+    fora — lá o vazio é resposta legítima sobre o acervo.
+    """
+    valor = parsed.facets.get("class")
+    if valor is None or valor in indexdb.CLASSES:
+        return
+    raise QueryError(
+        f"class:{valor} não é uma classe de memória — "
+        f"válidas: {', '.join(indexdb.CLASSES)}")
 
 
 def _prefilter(parsed: router.ParsedQuery) -> "tuple[str | None, list]":
     clauses: list[str] = []
     params: list = []
-    for key in ("type", "env", "project", "regime",
+    for key in ("type", "env", "project", "regime", "class",
                 *indexdb.PROVENANCE_COLS):
         if key in parsed.facets:
             clauses.append(f"e.{key} = ?")

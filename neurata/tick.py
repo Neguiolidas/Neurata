@@ -24,6 +24,7 @@ from neurata.frontmatter import FrontmatterError, parse, serialize
 from neurata.home import NeurataHome
 from neurata.indexdb import (
     IndexLock,
+    class_of,
     connect,
     entry_purge,
     fts_insert,
@@ -169,6 +170,20 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
     # (o preflight §3 já reconcilia entradas mortas/órfãs antes disto).
 
     # near-dup (§4)
+    # Um grão nunca conflita consigo mesmo. Item já indexado no inbox (por um
+    # reindex anterior) escapa do dedup exato — que só olha location='library'
+    # — e reaparecia em shingle_sets com jaccard 1.0 contra si próprio.
+    # Aqui: previne (skip no laço) e cura auto-referência já gravada em disco.
+    self_id = str(meta["id"])
+    existing = meta.get("conflicts_with", [])
+    if not isinstance(existing, list):
+        existing = [existing] if existing else []
+    existing = [cid for cid in existing if cid != self_id]
+    if existing:
+        meta["conflicts_with"] = existing
+    else:
+        meta.pop("conflicts_with", None)
+
     conflict_new = False
     target_id = None
     shingles = shingle_hashes(body)
@@ -176,6 +191,8 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
         cur_set = frozenset(shingles)
         best_score = 0.0
         for eid, sset in shingle_sets.items():
+            if eid == self_id:
+                continue
             score = jaccard(cur_set, sset)
             if score < NEAR_DUP_JACCARD:
                 continue
@@ -183,15 +200,9 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
                                       (target_id is None or eid < target_id)):
                 best_score = score
                 target_id = eid
-        if target_id is not None:
-            existing = meta.get("conflicts_with", [])
-            if not isinstance(existing, list):
-                existing = [existing] if existing else []
-            if target_id not in existing:
-                meta["conflicts_with"] = [*existing, target_id]
-                conflict_new = True
-            else:
-                meta["conflicts_with"] = existing
+        if target_id is not None and target_id not in existing:
+            meta["conflicts_with"] = [*existing, target_id]
+            conflict_new = True
 
     # slug + move (§1 passos 6–7)
     title = str(meta.get("title") or path.stem)
@@ -758,9 +769,9 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
-        " grain_quality, shingles, source_key, regime,"
+        " grain_quality, shingles, source_key, regime, class,"
         " agent, session, origin)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
          title, description,
@@ -769,7 +780,7 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
          str(meta.get("updated", meta.get("created", ""))),
          grain_quality, shingles_json,
          str(source_key) if source_key else None,
-         regime_of(meta), *provenance(meta)))
+         regime_of(meta), class_of(meta), *provenance(meta)))
     rowid = cur.lastrowid
     assert rowid is not None
     fts_insert(con, rowid, regime_of(meta), title=title, aliases=aliases_text,
