@@ -25,9 +25,9 @@ from neurata.home import NeurataHome
 from neurata.indexdb import (
     INDEX_SCHEMA_VERSION,
     IndexLock,
+    class_of,
     connect,
     create_schema,
-    class_of,
     drop_schema,
     fts_insert,
     project_of,
