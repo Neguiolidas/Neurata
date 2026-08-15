@@ -18,7 +18,6 @@ vez de reconstruir tudo a cada compactação. O CLI manual mantém o default
 `True` e o comportamento de hoje.
 """
 import os
-from datetime import datetime, timezone
 from pathlib import Path
 
 from neurata import archive
@@ -52,8 +51,14 @@ def compact(home: NeurataHome, ref: str, reindex_after: bool = True,
     sha = archive.put(home, body.encode("utf-8"))  # 1º: full salvo antes
     meta = dict(entry.meta)
     meta["derived_from"] = sha
-    meta["updated"] = datetime.now(timezone.utc).isoformat(
-        timespec="seconds")
+    # `updated` NÃO é carimbado: compactar troca a representação do grão,
+    # não o que ele diz — o original volta byte-a-byte do archive. A data
+    # responde "quando este conteúdo mudou para quem lê", e a manutenção
+    # não muda isso. Carimbar aqui zerava a idade de todo o acervo de uma
+    # vez, e como o shelf pontua recência (`exp(-Δdias/tau)`), os grãos
+    # recém-compactados subiam no ranking e expulsavam do topo material
+    # intacto — inclusive curado. Quem precisa saber que a compactação
+    # ocorreu lê `derived_from`/`derived_hash`; a data não mente por isso.
     _atomic_write(entry.path, serialize(meta, summary))  # 2º: arquivo
     result = {"action": "compacted", "id": eid, "path": rel, "archived": sha}
     if reindex_after:

@@ -18,7 +18,7 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 
-from neurata.dedup import shingle_hashes
+from neurata.dedup import pack_shingles, shingle_hashes
 from neurata.frontmatter import FrontmatterError, parse
 from neurata.grains import make_card, make_summary
 from neurata.home import NeurataHome
@@ -196,7 +196,7 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
     tags_text = " ".join(tag_list)
     aliases_text = " ".join(_aliases(meta))
     grain_quality = str(meta.get("grain_quality", "mechanical")) or "mechanical"
-    shingles_json = json.dumps(shingle_hashes(body))
+    shingles_blob = pack_shingles(shingle_hashes(body))
     description = str(meta.get("description", ""))
     fts_body = f"{description}\n\n{body}" if description else body
     # `derived_hash` = hash do corpo servido (o que está no arquivo agora,
@@ -217,7 +217,7 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
          project_of(meta), str(meta.get("content_hash", "")),
          str(meta.get("created", "")), str(meta.get("updated",
                                                     meta.get("created", ""))),
-         grain_quality, shingles_json, meta.get("source_key"),
+         grain_quality, shingles_blob, meta.get("source_key"),
          regime_of(meta), class_of(meta), *provenance(meta),
          meta.get("source_path"), derived_hash, meta.get("derived_from")))
     rowid = cur.lastrowid

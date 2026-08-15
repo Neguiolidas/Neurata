@@ -1,5 +1,4 @@
 """tests/test_indexdb.py"""
-import json
 import sqlite3
 import subprocess
 from pathlib import Path
@@ -7,6 +6,7 @@ from pathlib import Path
 import pytest
 from conftest import forge_v7_entries, insert_entry, set_index_version
 
+from neurata.dedup import pack_shingles
 from neurata.deposit import deposit
 from neurata.frontmatter import parse
 from neurata.home import NeurataHome
@@ -134,16 +134,16 @@ def test_load_shingle_sets_roundtrip(tmp_path):
         " description, content_hash, created, updated, shingles)"
         " VALUES ('u1','s1','library/s1.md','library','note','generic',"
         " 't','', 'h1','2026-01-01','2026-01-01', ?)",
-        (json.dumps(["aa", "bb"]),))
+        (pack_shingles(["aa" * 8, "bb" * 8]),))
     con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, content_hash, created, updated, shingles)"
         " VALUES ('u2','s2','library/s2.md','library','note','generic',"
         " 't2','', 'h2','2026-01-01','2026-01-01', ?)",
-        (json.dumps([]),))
+        (pack_shingles([]),))
     con.commit()
     sets = load_shingle_sets(con)
-    assert sets["u1"] == frozenset({"aa", "bb"})
+    assert sets["u1"] == frozenset({"aa" * 8, "bb" * 8})
     assert sets["u2"] == frozenset()
     assert isinstance(sets["u1"], frozenset)
 
@@ -158,13 +158,13 @@ def test_create_schema_has_source_key_column(tmp_path):
     assert "source_key" in column_names
 
 
-def test_index_schema_version_is_11():
-    """v11 = `derived_from` vira coluna (identidade de derivação do
-    espelho compactado) e os writers passam a preencher
-    `derived_hash`/`source_path`, mortas desde a v10. Literal de
-    propósito: o número é contrato com índices no disco, então subir a
-    constante tem que quebrar um teste e forçar um passo de migração."""
-    assert INDEX_SCHEMA_VERSION == 11
+def test_index_schema_version_is_12():
+    """v12 = `shingles` deixa de ser JSON e vira blob de 8 B por shingle
+    (o envelope de texto inflava 2,5× a maior coluna de `entries`).
+    Literal de propósito: o número é contrato com índices no disco, então
+    subir a constante tem que quebrar um teste e forçar um passo de
+    migração."""
+    assert INDEX_SCHEMA_VERSION == 12
 
 
 def test_create_schema_has_project_column(tmp_path):

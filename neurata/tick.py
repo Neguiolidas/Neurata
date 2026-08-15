@@ -20,7 +20,7 @@ from pathlib import Path, PurePosixPath
 
 from neurata import archive, indexdb
 from neurata.compact import _atomic_write, compact
-from neurata.dedup import NEAR_DUP_JACCARD, jaccard, shingle_hashes
+from neurata.dedup import NEAR_DUP_JACCARD, jaccard, pack_shingles, shingle_hashes
 from neurata.frontmatter import FrontmatterError, parse, serialize
 from neurata.home import NeurataHome
 from neurata.indexdb import (
@@ -942,7 +942,7 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
     tags_text = " ".join(tag_list)
     aliases_text = " ".join(_aliases(meta))
     grain_quality = str(meta.get("grain_quality", "mechanical")) or "mechanical"
-    shingles_json = _dumps(shingle_hashes(body))
+    shingles_blob = pack_shingles(shingle_hashes(body))
     source_key = meta.get("source_key")
     source_path = meta.get("source_path")
     derived_from = meta.get("derived_from")
@@ -964,7 +964,7 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
          project_of(meta), str(meta.get("content_hash", "")),
          str(meta.get("created", "")),
          str(meta.get("updated", meta.get("created", ""))),
-         grain_quality, shingles_json,
+         grain_quality, shingles_blob,
          str(source_key) if source_key else None,
          regime_of(meta), class_of(meta), *provenance(meta),
          str(source_path) if source_path else None, derived_hash,

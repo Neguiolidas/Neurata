@@ -6,6 +6,7 @@ import sqlite3
 from pathlib import PurePosixPath
 
 from neurata import frontmatter
+from neurata.dedup import pack_shingles, unpack_shingles
 from neurata.frontmatter import FrontmatterError
 from neurata.home import NeurataHome
 from neurata.textnorm import normalize
@@ -25,8 +26,9 @@ _REMEDY = (
 # v10: eixo de memória (`class`), origem do link (`source_path`), invalidação
 # da derivação (`derived_hash`) e `edges` rechaveada por `id`; v11: identidade
 # de derivação do espelho compactado (`derived_from`) — os writers passam a
-# preencher `derived_hash`/`source_path`, mortas desde a v10.
-INDEX_SCHEMA_VERSION = 11
+# preencher `derived_hash`/`source_path`, mortas desde a v10; v12: `shingles`
+# empacotada em blob de 8 B por shingle (era JSON, 2,5× maior).
+INDEX_SCHEMA_VERSION = 12
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -63,7 +65,7 @@ CREATE TABLE IF NOT EXISTS entries(
   created TEXT NOT NULL,
   updated TEXT NOT NULL,
   grain_quality TEXT NOT NULL DEFAULT 'mechanical',
-  shingles TEXT NOT NULL,
+  shingles BLOB NOT NULL,  -- 8 B/shingle empacotado (dedup.pack_shingles)
   source_key TEXT,
   regime TEXT NOT NULL DEFAULT 'curated'
          CHECK(regime IN ('mirror', 'curated')),
@@ -724,13 +726,61 @@ def _v10_to_v11(con: sqlite3.Connection, home: NeurataHome) -> None:
         raise
 
 
-_MIGRATIONS = {7: _v7_to_v8, 8: _v8_to_v9, 9: _v9_to_v10, 10: _v10_to_v11}
+def _v11_to_v12(con: sqlite3.Connection, home: NeurataHome) -> None:
+    """v11 → v12: `shingles` de JSON-texto para blob de 8 B por shingle.
+
+    O JSON gastava 20 B por shingle (16 do hex + aspas + vírgula) para
+    guardar 8 B de entropia — 2,5× de inflação numa coluna que, com ~90
+    shingles por grão, dominava o tamanho da tabela `entries`. O blob é
+    a mesma informação sem o envelope: `dedup.pack_shingles` é a inversa
+    exata de `unpack_shingles`, e a lista já vinha ordenada de
+    `shingle_hashes`, então a ida e volta preserva o conteúdo bit a bit.
+    Nenhum grão precisa ser relido do disco — a conversão é puramente do
+    dado que já está no índice.
+
+    Converte só o que ainda é `str`: se um crash interromper a migração
+    no meio, a segunda execução pula as linhas já em blob em vez de
+    tentar `json.loads` num `bytes` e abortar. A escrita inteira roda em
+    uma transação, então na prática o banco nunca é visto meio-migrado —
+    a tolerância existe porque idempotência barata vale mais que a
+    aposta de que todo crash cai fora da transação.
+
+    A **declaração** da coluna continua `TEXT NOT NULL` nos bancos
+    migrados (SQLite não tem `ALTER COLUMN`; trocar o tipo exigiria
+    recriar `entries`, invalidando os rowids de que os dois índices FTS
+    external-content dependem). Só bancos novos nascem com `BLOB`. A
+    divergência é cosmética: a afinidade TEXT preserva blobs intactos,
+    e todo leitor passa por `unpack_shingles`, que aceita os dois.
+    """
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        rows = con.execute("SELECT rowid, shingles FROM entries").fetchall()
+        con.executemany(
+            "UPDATE entries SET shingles = ? WHERE rowid = ?",
+            [
+                (pack_shingles(json.loads(shingles)), rowid)
+                for rowid, shingles in rows
+                if isinstance(shingles, str)
+            ],
+        )
+        con.execute("INSERT OR REPLACE INTO meta VALUES"
+                    " ('index_schema_version', '12')")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
+_MIGRATIONS = {
+    7: _v7_to_v8, 8: _v8_to_v9, 9: _v9_to_v10, 10: _v10_to_v11,
+    11: _v11_to_v12,
+}
 
 
 def load_shingle_sets(con: sqlite3.Connection) -> "dict[str, frozenset]":
     """{entry.id: frozenset(shingle-hashes)} pra near-dup em Task 4."""
     rows = con.execute("SELECT id, shingles FROM entries").fetchall()
-    return {eid: frozenset(json.loads(shingles)) for eid, shingles in rows}
+    return {eid: unpack_shingles(shingles) for eid, shingles in rows}
 
 
 def drop_schema(con: sqlite3.Connection) -> None:

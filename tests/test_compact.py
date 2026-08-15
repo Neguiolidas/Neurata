@@ -56,6 +56,25 @@ def test_compact_aceita_grao_espelhado(tmp_path):
     assert len(corpo) < len(CORPO)
 
 
+def test_compact_preserva_updated_do_grao(tmp_path):
+    """Compactar troca a representação, não o que o grão diz.
+
+    Carimbar `updated` zerava a idade do acervo inteiro de uma vez, e o
+    shelf pontua recência: os grãos recém-compactados subiam no ranking e
+    empurravam material intacto — inclusive curado — para fora do topo.
+    """
+    home, path = _grao(tmp_path, "m1", {"source_key": "skill:a",
+                                        "source_path": "a/SKILL.md"})
+    antes, _ = parse(path.read_text(encoding="utf-8"))
+
+    assert compact(home, "m1")["action"] == "compacted"
+
+    depois, corpo = parse(path.read_text(encoding="utf-8"))
+    assert depois["updated"] == antes["updated"]
+    assert len(corpo) < len(CORPO)          # compactou de fato
+    assert depois["derived_from"]           # e é rastreável sem a data
+
+
 def test_compact_expand_restore_espelho_e_byte_a_byte(tmp_path):
     """A12 — compact seguido de expand --restore devolve o corpo do
     espelho exatamente como era antes de compactar."""
