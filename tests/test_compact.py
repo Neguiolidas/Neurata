@@ -43,17 +43,20 @@ def test_compact_aceita_grao_curado_mecanico(tmp_path):
     assert len(corpo) < len(CORPO)
 
 
-def test_compact_aceita_grao_espelhado(tmp_path):
-    """v1.4: a recusa de mirror caiu (só `refined` continua recusado)."""
+def test_compact_recusa_grao_espelhado(tmp_path):
+    """Espelho tem dono: a fonte. O próximo tick reescreve o corpo a partir
+    dela e `_sync_update_in_place` derruba o `derived_from` junto — a
+    compactação sumiria sem aviso e o blob ficaria órfão no archive.
+    Recusar na hora é honesto; aceitar é trabalho que evapora."""
     home, path = _grao(tmp_path, "m1", {"source_key": "skill:a",
                                         "source_path": "a/SKILL.md"})
+    antes = path.read_text(encoding="utf-8")
 
     out = compact(home, "m1")
 
-    assert out["action"] == "compacted"
-    assert out["archived"]
-    _, corpo = parse(path.read_text(encoding="utf-8"))
-    assert len(corpo) < len(CORPO)
+    assert out["action"] == "refused"
+    assert "tick" in out["reason"]
+    assert path.read_text(encoding="utf-8") == antes  # nada tocado
 
 
 def test_compact_preserva_updated_do_grao(tmp_path):
@@ -63,8 +66,7 @@ def test_compact_preserva_updated_do_grao(tmp_path):
     shelf pontua recência: os grãos recém-compactados subiam no ranking e
     empurravam material intacto — inclusive curado — para fora do topo.
     """
-    home, path = _grao(tmp_path, "m1", {"source_key": "skill:a",
-                                        "source_path": "a/SKILL.md"})
+    home, path = _grao(tmp_path, "m1", {"grain_quality": "mechanical"})
     antes, _ = parse(path.read_text(encoding="utf-8"))
 
     assert compact(home, "m1")["action"] == "compacted"
@@ -75,11 +77,10 @@ def test_compact_preserva_updated_do_grao(tmp_path):
     assert depois["derived_from"]           # e é rastreável sem a data
 
 
-def test_compact_expand_restore_espelho_e_byte_a_byte(tmp_path):
-    """A12 — compact seguido de expand --restore devolve o corpo do
-    espelho exatamente como era antes de compactar."""
-    home, path = _grao(tmp_path, "m2", {"source_key": "skill:a",
-                                        "source_path": "a/SKILL.md"})
+def test_compact_expand_restore_e_byte_a_byte(tmp_path):
+    """A12 — compact seguido de expand --restore devolve o corpo
+    exatamente como era antes de compactar."""
+    home, path = _grao(tmp_path, "m2", {"grain_quality": "mechanical"})
 
     compacted = compact(home, "m2")
     assert compacted["action"] == "compacted"
@@ -95,19 +96,10 @@ def test_compact_expand_restore_espelho_e_byte_a_byte(tmp_path):
     assert corpo_restaurado == CORPO
 
 
-def test_compact_reindex_after_false_nao_reindexa(tmp_path, monkeypatch):
-    home, _ = _grao(tmp_path, "n1", {"grain_quality": "mechanical"})
-    chamadas = []
-    monkeypatch.setattr("neurata.compact.reindex", chamadas.append)
 
-    out = compact(home, "n1", reindex_after=False)
-
-    assert out["action"] == "compacted"
-    assert chamadas == []
-
-
-def test_compact_reindex_after_default_true_reindexa(tmp_path, monkeypatch):
-    """O default preserva o comportamento de hoje: o CLI manual reindexa."""
+def test_compact_reindexa_o_indice(tmp_path, monkeypatch):
+    """Compactar troca o corpo servido: sem reindexar, a busca continua
+    devolvendo o texto velho até o próximo tick."""
     home, _ = _grao(tmp_path, "n2", {"grain_quality": "mechanical"})
     chamadas = []
     monkeypatch.setattr("neurata.compact.reindex", chamadas.append)
@@ -181,7 +173,7 @@ def test_compact_com_indice_travado_reporta_pendencia_nao_falha(
 
     monkeypatch.setattr("neurata.compact.reindex", travado)
 
-    out = compact(home, "l1", reindex_after=True)
+    out = compact(home, "l1")
 
     assert out["action"] == "compacted-pending-index"
     assert out["archived"]
@@ -190,51 +182,5 @@ def test_compact_com_indice_travado_reporta_pendencia_nao_falha(
     assert len(corpo) < len(CORPO)  # o arquivo foi compactado de fato
 
 
-def test_compact_com_path_conhecido_nao_varre_o_acervo(tmp_path, monkeypatch):
-    """O atalho é o ponto da mudança: com `path`, `resolve` (O(acervo),
-    ~0,2 s nos 15 mil arquivos reais) não deve nem ser chamado."""
-    home, path = _grao(tmp_path, "p1", {"grain_quality": "mechanical"})
-
-    def proibido(*a, **kw):
-        raise AssertionError("resolve varreu o acervo apesar do path")
-
-    monkeypatch.setattr("neurata.compact.resolve", proibido)
-
-    out = compact(home, "p1", reindex_after=False, path=path)
-
-    assert out["action"] == "compacted"
 
 
-def test_compact_com_path_mentiroso_cai_no_resolve(tmp_path):
-    """A linha do índice é dica, não verdade. Path que não existe mais
-    (arquivo movido/renomeado depois do SELECT) não pode virar erro: o
-    disco decide."""
-    home, real = _grao(tmp_path, "p2", {"grain_quality": "mechanical"})
-    fantasma = home.library / "sumiu-entre-o-select-e-agora.md"
-
-    out = compact(home, "p2", reindex_after=False, path=fantasma)
-
-    assert out["action"] == "compacted"
-    assert out["path"] == str(real.relative_to(home.root))
-
-
-def test_compact_ignora_path_fora_do_home(tmp_path):
-    """Índice velho (ou adulterado) apontando pra fora de library/inbox
-    não pode virar entrada pelo atalho e escapar do domínio que
-    `resolve` varre: o arquivo de fora fica intacto e quem compacta é o
-    grão de dentro."""
-    home, dentro = _grao(tmp_path, "p3", {"grain_quality": "mechanical"})
-    fora = tmp_path.parent / "fora-do-home.md"
-    fora.write_text(
-        serialize({"id": "p3", "title": "p3",
-                   "created": "2026-08-10T00:00:00+00:00",
-                   "updated": "2026-08-10T00:00:00+00:00"}, CORPO),
-        encoding="utf-8")
-    intacto = fora.read_text(encoding="utf-8")
-    try:
-        out = compact(home, "p3", reindex_after=False, path=fora)
-
-        assert out["path"] == str(dentro.relative_to(home.root))
-        assert fora.read_text(encoding="utf-8") == intacto
-    finally:
-        fora.unlink()
