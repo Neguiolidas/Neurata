@@ -1374,16 +1374,18 @@ def test_preexisting_self_conflict_is_healed(tmp_path):
     assert "conflicts_with" not in meta
 
 
-# ── v1.4 §F3: compactação de espelho sob o tick ─────────────────────
-# Cobre o design v1.4 (docs/superpowers/specs/2026-08-14-neurata-v1.4-
-# ciclo-de-vida-design.md): A11 (crash nos 5 pontos da ordem §4
-# converge), A14 (teto exato de 500/tick), a drenagem do no-op (D-4,
-# medido: 4,0% da amostra real não tem ganho) e a idempotência.
+# ── v1.4: derivação de espelho (derived_from / derived_hash) ────────
+# A compactação automática sob o tick foi revertida antes do ship (só
+# `neurata compact` manual existe), então o que resta aqui são as
+# invariantes da derivação que a v1.4 introduziu e que a compactação
+# manual depende: atomicidade da escrita do índice, reconciliação de
+# órfão comparando `derived_hash` (não `content_hash`), e limpeza de
+# `derived_from` obsoleto quando o corpo é reescrito em place.
 #
 # `_FULL_BODY` tem 3 parágrafos sem heading: `make_summary` (sem
-# heading) usa só os 2 primeiros — ganho real garantido, diferente dos
-# corpos de parágrafo único usados no resto do arquivo (que são ponto
-# fixo/no-op).
+# heading) usa só os 2 primeiros — o resumo é sempre menor que o corpo,
+# diferente dos corpos de parágrafo único usados no resto do arquivo
+# (onde resumo == corpo e a derivação seria no-op).
 
 _FULL_BODY = (
     "Primeiro paragrafo do corpo completo do espelho de teste, com "
@@ -1394,25 +1396,6 @@ _FULL_BODY = (
     "aparece no resumo, e é por isso que a compactação tem ganho "
     "real aqui.\n"
 )
-
-
-def _seed_mirror(home, filename, entry_id, source_key, title, body):
-    """Cria um espelho direto na library (como `_lib_skill_entry`), mas
-    também seeda um registro `catalog` no journal com `dst` = seu path
-    — pra `_reconcile_journal_orphans` (T2) não o tratar como órfão
-    write-then-log. Sem isto, os testes de crash de compactação abaixo
-    ficariam acoplados à reconciliação de órfãos (preocupação
-    ortogonal): qualquer mutação manual do arquivo pós-`reindex`, feita
-    pra simular um estado de crash, divergiria de `derived_hash` no
-    índice e seria (corretamente, por outro motivo) quarentenada antes
-    de `_compact_mirrors` sequer rodar."""
-    _lib_skill_entry(home, filename, entry_id, source_key, title, body)
-    rel = f"library/{filename}"
-    seed_report = TickReport(tick="01SEEDJOURNAL0000000000000")
-    _write_journal(home, "01SEEDJOURNAL0000000000000", "catalog", entry_id,
-                  None, rel, seed_report,
-                  content_hash=hashlib.sha256(body.encode("utf-8")).hexdigest())
-    reindex(home)
 
 
 def test_index_write_without_commit_is_invisible_after_reconnect(tmp_path):

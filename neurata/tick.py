@@ -11,7 +11,6 @@ Tick só ACRESCENTA chaves de frontmatter — nunca edita valor
 existente, nunca toca corpo (exceção aditiva documentada: `conflicts_with`).
 """
 import hashlib
-import json
 import os
 import time
 from dataclasses import dataclass, field
@@ -816,7 +815,3 @@ def _aliases(meta: dict) -> "list[str]":
     if isinstance(v, list):
         return [str(a) for a in v if str(a).strip()]
     return [str(v)] if str(v).strip() else []
-
-
-def _dumps(value: object) -> str:
-    return json.dumps(value)
