@@ -26,8 +26,10 @@ representation, never a change of content.
   `fail`, not as a warning to be scrolled past.
 
 ### Changed
-- Index schema v10 → v12, migrated in place. v11 opens `derived_hash`
-  and `derived_from`; v12 **packs `shingles`** from a JSON array of hex
+- Index schema v10 → v12, migrated in place. v11 opens `derived_from` and
+  backfills `derived_hash`: the column has existed since v10 but was
+  never written, so every pre-1.4 row now states that what it serves is
+  what it was given; v12 **packs `shingles`** from a JSON array of hex
   strings into a blob of 8-byte keys. Measured on this archive: 82.8 MiB
   → 33.1 MiB, **−60%** over 14,979 grains and 4.34 M shingles, with the
   same near-duplicate results — it is the same set, stored as bytes
@@ -51,9 +53,26 @@ representation, never a change of content.
   the archived blob, and the mechanical Miner does not demote what the
   DeepMiner refined.
 - `tick` runs `git gc --auto` after its commit. Each commit leaves loose
-  objects behind, and a batch of compactions touches hundreds — measured
-  at +1.69 MiB of loose objects against −1.65 MiB of body over 1,004
-  grains, i.e. the audit trail growing faster than the archive shrank.
+  objects behind, and a batch of `compact` runs touches hundreds —
+  measured at +1.69 MiB of loose objects against −1.65 MiB of body over
+  1,004 grains, i.e. the audit trail growing faster than the archive
+  shrank.
+
+### Known limitations
+- **Compaction stays manual.** This release was meant to compact mirrors
+  automatically at the end of each `tick`; the trial on a real archive
+  killed it. Top-10 recall over 147 queries replayed from this machine's
+  own log fell from 100% to 95% — signal lost in search, and paid for in
+  disk (see below). `compact` remains a utility you point at a grain, and
+  `tick` will not shrink anything behind your back.
+- **Compacting grows the corpus on disk.** The archive keeps the
+  deposited body next to the served one, so compacting adds a copy rather
+  than replacing one: compacting this whole archive by hand took
+  `library` + `archive` from 108 MiB to 157 MiB (**+45%**) over 13,955
+  grains. What shrinks is what gets read on every query — the served body
+  and, above all, the index over it. Compaction buys retrieval and
+  context, not disk. If disk is the constraint, this release is not the
+  one you want.
 
 ## [1.3.0] - 2026-08-13
 
