@@ -81,7 +81,7 @@ def test_corrupt_index_fails_cleanly(tmp_path):
     home = _home(tmp_path)
     home.index_path.write_bytes(b"\x00lixo que nao e sqlite\xff\xfe")
     checks = run_checks(home)  # nao pode explodir
-    assert len(checks) == 16  # todos os checks presentes (inclui last-tick, gate)
+    assert len(checks) == 17  # todos os checks presentes (inclui derived-integrity, last-tick, gate)
     by = _by_name(checks)
     assert by["index"].status == "fail"
     assert by["index"].remedy
@@ -260,3 +260,89 @@ def test_regime_detecta_pista_dessincronizada(tmp_path):
     check = _by_name(run_checks(home))["regime"]
     assert check.status == "fail"
     assert "reindex" in check.remedy
+
+
+# ── derived-integrity: espelho compactado com fonte/blob íntegro ──────────────
+def test_derived_integrity_ok_when_nothing_compacted(tmp_path):
+    home = _home(tmp_path)
+    (home.library / "n.md").write_text("---\nid: 01Z\ntitle: T\n---\ncorpo\n")
+    reindex(home)
+    checks = _by_name(run_checks(home))
+    assert checks["derived-integrity"].status == "ok"
+    assert "nenhuma" in checks["derived-integrity"].detail
+
+
+def test_derived_integrity_ok_when_blob_and_source_present(tmp_path):
+    """Espelho compactado com blob no archive e fonte no disco: ok."""
+    home = _home(tmp_path)
+    # Cria arquivo espelhado com blob no archive e source_path válido
+    sha = archive.put(home, b"full original")
+    source = home.library / "fonte.md"
+    source.write_text("---\nid: espelho\ntitle: T\n---\noriginal\n")
+    entry = home.library / "c.md"
+    entry.write_text(
+        f"---\nid: 01A\ntitle: T\nderived_from: {sha}\n"
+        f"source_path: library/fonte.md\n---\nsummary\n")
+    reindex(home)
+    checks = _by_name(run_checks(home))
+    assert checks["derived-integrity"].status == "ok"
+
+
+def test_derived_integrity_ok_with_null_source_path(tmp_path):
+    """Espelho compactado com source_path NULL: não deve falhar.
+
+    Consequência declarada (spec §5.3): source_path fica NULL até o
+    primeiro reindex full. É normal e não é erro."""
+    home = _home(tmp_path)
+    sha = archive.put(home, b"full original")
+    entry = home.library / "c.md"
+    entry.write_text(
+        f"---\nid: 01A\ntitle: T\nderived_from: {sha}\n---\nsummary\n")
+    reindex(home)
+    checks = _by_name(run_checks(home))
+    assert checks["derived-integrity"].status == "ok"
+
+
+def test_derived_integrity_fails_when_blob_missing(tmp_path):
+    """Espelho compactado com blob ausente no archive: fail."""
+    home = _home(tmp_path)
+    missing_sha = "a" * 64
+    entry = home.library / "c.md"
+    entry.write_text(
+        f"---\nid: 01B\ntitle: T\nderived_from: {missing_sha}\n---\nsum\n")
+    reindex(home)
+    checks = _by_name(run_checks(home))
+    assert checks["derived-integrity"].status == "fail"
+    assert missing_sha[:8] in checks["derived-integrity"].detail
+    assert checks["derived-integrity"].remedy
+
+
+def test_derived_integrity_fails_when_source_missing(tmp_path):
+    """Espelho compactado com fonte sumida no disco: fail."""
+    home = _home(tmp_path)
+    sha = archive.put(home, b"full original")
+    entry = home.library / "c.md"
+    entry.write_text(
+        f"---\nid: 01C\ntitle: T\nderived_from: {sha}\n"
+        f"source_path: library/sumiu.md\n---\nsummary\n")
+    reindex(home)
+    checks = _by_name(run_checks(home))
+    assert checks["derived-integrity"].status == "fail"
+    assert "sumiu.md" in checks["derived-integrity"].detail
+    assert checks["derived-integrity"].remedy
+
+
+def test_derived_integrity_fails_when_both_missing(tmp_path):
+    """Espelho compactado com blob e fonte ausentes: fail mostra ambos."""
+    home = _home(tmp_path)
+    missing_sha = "b" * 64
+    entry = home.library / "c.md"
+    entry.write_text(
+        f"---\nid: 01D\ntitle: T\nderived_from: {missing_sha}\n"
+        f"source_path: library/sumiu.md\n---\nsummary\n")
+    reindex(home)
+    checks = _by_name(run_checks(home))
+    assert checks["derived-integrity"].status == "fail"
+    detail = checks["derived-integrity"].detail
+    assert missing_sha[:8] in detail
+    assert "sumiu.md" in detail

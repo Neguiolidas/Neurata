@@ -78,3 +78,46 @@ def forge_v9_edges(con: sqlite3.Connection) -> None:
     """
     con.executescript("DROP TABLE IF EXISTS edges;" + _V9_EDGES)
     con.commit()
+
+
+# `entries` na v10 (pré-`derived_from`): a DDL corrente menos a coluna que
+# só chega na v11.
+_V10_ENTRIES = """
+CREATE TABLE entries(
+  rowid INTEGER PRIMARY KEY,
+  id TEXT NOT NULL UNIQUE,
+  slug TEXT NOT NULL UNIQUE,
+  path TEXT NOT NULL,
+  location TEXT NOT NULL CHECK(location IN ('library','inbox')),
+  type TEXT NOT NULL DEFAULT 'note',
+  env TEXT NOT NULL DEFAULT 'generic',
+  title TEXT NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  project TEXT,
+  content_hash TEXT NOT NULL,
+  created TEXT NOT NULL,
+  updated TEXT NOT NULL,
+  grain_quality TEXT NOT NULL DEFAULT 'mechanical',
+  shingles TEXT NOT NULL,
+  source_key TEXT,
+  regime TEXT NOT NULL DEFAULT 'curated'
+         CHECK(regime IN ('mirror', 'curated')),
+  agent TEXT,
+  session TEXT,
+  origin TEXT,
+  class TEXT,
+  source_path TEXT,
+  derived_hash TEXT
+);
+"""
+
+
+def forge_v10_entries(con: sqlite3.Connection) -> None:
+    """Substitui `entries` pela DDL da v10 (destrutivo: a tabela some).
+
+    Sem isto um "índice v10" de teste já nasceria com `derived_from` (a
+    DDL corrente, via `CREATE TABLE IF NOT EXISTS` de `connect()`) e o
+    `ALTER TABLE` da migração v10→v11 nunca seria exercido.
+    """
+    con.executescript("DROP TABLE IF EXISTS entries;" + _V10_ENTRIES)
+    con.commit()

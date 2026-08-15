@@ -41,6 +41,7 @@ def run_checks(home: NeurataHome) -> list[Check]:
     checks.append(_skipped(home))
     checks.append(_lock(home))
     checks.append(_archive(home))
+    checks.append(_derived_integrity(home))
     checks.append(_usage(home))
     checks.append(_last_tick(home))
     checks.append(_gate(home))
@@ -288,6 +289,66 @@ def _archive(home: NeurataHome) -> Check:
                      "reescreve blobs, então corrupção só vem de fora")
     detail = f"{len(sample)}/{len(shas)} blob(s) verificado(s), ok"
     return Check("archive", "ok", detail)
+
+
+def _derived_integrity(home: NeurataHome) -> Check:
+    """Espelho compactado: blob no archive existe? fonte no disco existe?
+
+    Para cada entrada com `derived_from IS NOT NULL`, verifica:
+    1. O blob `derived_from` existe no archive?
+    2. Se `source_path` não é NULL, a fonte ainda existe no disco?
+
+    Reporta, não conserta. Consequência declarada (spec §5.3): `source_path`
+    é NULL até o primeiro reindex full — só há dados depois desse. Blobs
+    órfãos no archive são inócuos (content-addressed, dedup); fontes sumidas
+    são benignas (o `expand` restaura do archive)."""
+    if not home.index_path.exists():
+        return Check("derived-integrity", "ok",
+                     "index.db ausente (ver check index)")
+    con = sqlite3.connect(home.index_path)
+    try:
+        # Contar quantos espelhos compactados existem
+        total = con.execute(
+            "SELECT COUNT(*) FROM entries WHERE derived_from IS NOT NULL"
+        ).fetchone()[0]
+        if not total:
+            return Check("derived-integrity", "ok",
+                         "nenhuma entrada compactada")
+        # Varredura COMPLETA, não amostra. O `_archive` amostra porque lê e
+        # re-hasheia o conteúdo dos blobs; aqui só se pergunta se o arquivo
+        # existe (um stat). Medido no acervo real: 14.867 stats em 180 ms.
+        # Amostrar economizaria 0,18 s em troca de um falso negativo
+        # sistemático — e o que este check detecta é perda IRREVERSÍVEL: o
+        # corpo original do espelho compactado só existe nesse blob.
+        rows = con.execute(
+            "SELECT id, derived_from, source_path FROM entries "
+            "WHERE derived_from IS NOT NULL").fetchall()
+    except sqlite3.DatabaseError as exc:
+        return Check("derived-integrity", "warn",
+                     f"índice ilegível ({exc})",
+                     "rode `neurata reindex`")
+    finally:
+        con.close()
+    bad = []
+    for entry_id, derived_from, source_path in rows:
+        # Verificar se blob existe no archive
+        if not archive.has(home, derived_from):
+            bad.append(f"{entry_id}: blob {derived_from[:8]}... ausente")
+        # Verificar se fonte existe no disco (só se source_path não é NULL)
+        if source_path is not None:
+            full_path = home.root / source_path
+            if not full_path.exists():
+                bad.append(f"{entry_id}: fonte {source_path} ausente")
+    if bad:
+        return Check("derived-integrity", "fail",
+                     f"{len(bad)} erro(s) em {total} espelho(s) "
+                     f"compactado(s): " + "; ".join(bad[:3])
+                     + (f" (+{len(bad) - 3})" if len(bad) > 3 else ""),
+                     "blob ausente: restaure archive/ de backup; fonte "
+                     "ausente: restaure de backup ou use `expand(id)` "
+                     "pra restaurar do archive")
+    return Check("derived-integrity", "ok",
+                 f"{total} espelho(s) compactado(s) verificado(s)")
 
 
 def _usage(home: NeurataHome) -> Check:

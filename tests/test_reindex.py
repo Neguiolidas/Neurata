@@ -1,4 +1,5 @@
 """tests/test_reindex.py"""
+import hashlib
 import os
 
 import pytest
@@ -298,3 +299,42 @@ def test_reindex_deposited_entry_carries_provenance(tmp_path):
     # conteúdo inline, o path p/ `--file`. Quem consultar `origin:` está
     # perguntando "por onde entrou", não "quem mandou".
     assert tuple(row) == ("hermes", "s-99", "manual")
+
+
+def test_reindex_fills_derived_hash_for_every_row(tmp_path):
+    """v1.4 F1: `derived_hash` era coluna morta (0/N preenchida). Um
+    reindex do zero preenche 100% das rows, com o hash do corpo servido
+    (o que está no arquivo agora — igual a `content_hash` enquanto nada
+    foi compactado, mas é outro conceito, ver design v1.4 §2/D-1)."""
+    home = _home(tmp_path)
+    (home.library / "a.md").write_text("---\nid: 01A\ntitle: A\n---\ncorpo a\n")
+    (home.library / "b.md").write_text("---\nid: 01B\ntitle: B\n---\ncorpo b\n")
+    reindex(home)
+    con = connect(home)
+    rows = dict(con.execute(
+        "SELECT id, derived_hash FROM entries").fetchall())
+    assert rows == {
+        "01A": hashlib.sha256(b"corpo a\n").hexdigest(),
+        "01B": hashlib.sha256(b"corpo b\n").hexdigest(),
+    }
+
+
+def test_reindex_writes_source_path_and_derived_from(tmp_path):
+    """`source_path`/`derived_from` do frontmatter viram coluna
+    consultável (antes só existiam no frontmatter, mortas no índice)."""
+    home = _home(tmp_path)
+    (home.library / "espelho.md").write_text(
+        "---\nid: 01C\ntitle: Espelho\nsource_path: /tmp/origem.md\n"
+        "derived_from: " + "f" * 64 + "\n---\ncorpo compactado\n")
+    (home.library / "sem-procedencia.md").write_text(
+        "---\nid: 01D\ntitle: Sem procedencia\n---\ncorpo qualquer\n")
+    reindex(home)
+    con = connect(home)
+    row = con.execute(
+        "SELECT source_path, derived_from FROM entries"
+        " WHERE id='01C'").fetchone()
+    assert tuple(row) == ("/tmp/origem.md", "f" * 64)
+    row = con.execute(
+        "SELECT source_path, derived_from FROM entries"
+        " WHERE id='01D'").fetchone()
+    assert tuple(row) == (None, None)

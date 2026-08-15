@@ -199,12 +199,18 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
     shingles_json = json.dumps(shingle_hashes(body))
     description = str(meta.get("description", ""))
     fts_body = f"{description}\n\n{body}" if description else body
+    # `derived_hash` = hash do corpo servido (o que está no arquivo agora,
+    # compactado ou não) — distinto de `content_hash`, que é sempre o hash
+    # da fonte e nunca muda com a compactação (design v1.4 §2/D-1). Mesmo
+    # valor que `_write_grains` usaria como `body_hash`; computado uma vez
+    # e reaproveitado, não duas implementações do mesmo hash.
+    derived_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
         " grain_quality, shingles, source_key, regime, class,"
-        " agent, session, origin)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " agent, session, origin, source_path, derived_hash, derived_from)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
          title, description,
@@ -212,7 +218,8 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
          str(meta.get("created", "")), str(meta.get("updated",
                                                     meta.get("created", ""))),
          grain_quality, shingles_json, meta.get("source_key"),
-         regime_of(meta), class_of(meta), *provenance(meta)))
+         regime_of(meta), class_of(meta), *provenance(meta),
+         meta.get("source_path"), derived_hash, meta.get("derived_from")))
     rowid = cur.lastrowid
     assert rowid is not None  # INSERT sempre popula lastrowid
     fts_insert(con, rowid, regime_of(meta), title=title, aliases=aliases_text,
@@ -220,13 +227,12 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
     for tag in {t.lower() for t in tag_list}:
         con.execute("INSERT OR IGNORE INTO entry_tags VALUES (?,?)",
                     (rowid, tag))
-    _write_grains(con, str(meta["id"]), meta, body, old_grains)
+    _write_grains(con, str(meta["id"]), meta, body, old_grains, derived_hash)
     return rowid
 
 
 def _write_grains(con: sqlite3.Connection, entry_id: str, meta: dict,
-                   body: str, old_grains: dict) -> None:
-    body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+                   body: str, old_grains: dict, body_hash: str) -> None:
     prior = old_grains.get(entry_id, {})
 
     card_prev = prior.get("card")

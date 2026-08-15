@@ -4,13 +4,16 @@ Cobre §1 (pipeline geral), §3 (renames/órfãos/entradas mortas) e §4
 (near-dup). Ver docs/superpowers/specs/2026-07-18-neurata-v0.4-tick.md.
 """
 import hashlib
+import json
 import os
 import subprocess
 
 import pytest
 from conftest import forge_v7_entries, insert_entry, set_index_version
 
-from neurata.frontmatter import parse
+from neurata import archive
+from neurata.frontmatter import parse, serialize
+from neurata.grains import make_summary
 from neurata.home import NeurataHome
 from neurata.indexdb import connect, fts_insert
 from neurata.query import query
@@ -19,10 +22,13 @@ from neurata.snapshot import list_snapshots
 from neurata.tick import (
     TickReport,
     TickStructuralError,
+    _index_delete,
+    _index_insert,
     _sync_update_in_place,
     curate_tick,
 )
 from neurata.tick import _journal as _write_journal
+from neurata.usage import log_event
 
 
 def _home(tmp_path):
@@ -787,7 +793,7 @@ def test_skill_item_noop_when_hash_matches_library(tmp_path):
     _lib_skill_entry(home, "foo.md", "01SKILLLIB000000000000",
                     "claude-code:foo", "Foo Skill", body)
     reindex(home)
-    original = (home.library / "foo.md").read_text()
+    original_meta, original_body = parse((home.library / "foo.md").read_text())
     _skill_item(home, "foo-new.md", "01SKILLNEWID00000000000",
                "claude-code:foo", "Foo Skill", body)
 
@@ -801,12 +807,27 @@ def test_skill_item_noop_when_hash_matches_library(tmp_path):
     assert report.processed == 1
     assert report.updated == 0
     assert list(home.inbox.glob("*.md")) == []
-    assert (home.library / "foo.md").read_text() == original
+    # foo.md É um espelho pendente (regime=mirror, derived_from ausente):
+    # o passo de compactação da v1.4 (§F3) o alcança na MESMA volta, depois
+    # da reconciliação T2. `body` é parágrafo único sem heading — ponto
+    # fixo de `make_summary` — então vira o caso "no-op sem ganho" do D-4:
+    # o corpo servido não muda (ainda o mesmo texto), só `derived_from`/
+    # `updated` entram no frontmatter. Por isso a comparação é sobre o
+    # corpo (que É estável, o que o nome do teste afirma), não sobre o
+    # texto bruto do arquivo (que ganha um campo novo, esperado).
+    new_meta, new_body = parse((home.library / "foo.md").read_text())
+    assert new_body == original_body
+    assert new_meta["id"] == original_meta["id"]
+    assert new_meta["title"] == original_meta["title"]
+    assert new_meta.get("derived_from")  # F3: no-op ainda ganha a marca
     journal = _journal(home)
-    assert len(journal) == 1
-    assert journal[0]["verb"] == "catalog"
-    assert journal[0]["item"] == "01SKILLLIB000000000000"
-    assert journal[0].get("reconciled") == "write-then-log"
+    catalog_recs = [r for r in journal if r["verb"] == "catalog"]
+    assert len(catalog_recs) == 1
+    assert catalog_recs[0]["item"] == "01SKILLLIB000000000000"
+    assert catalog_recs[0].get("reconciled") == "write-then-log"
+    # sem "update" pro skill-item: ele é mesmo um no-op, o compact do F3
+    # não é update — é o único outro verb que pode aparecer aqui.
+    assert {r["verb"] for r in journal} <= {"catalog", "compact"}
 
 
 def test_skill_item_update_in_place_preserves_id_slug_path(tmp_path):
@@ -1184,6 +1205,45 @@ def test_reindex_agrees_with_tick_on_provenance(tmp_path):
     assert before == after
 
 
+# ── v1.4 F1: derived_hash/source_path/derived_from pelo tick ──────────
+
+def test_tick_writes_derived_hash(tmp_path):
+    """v1.4 F1: o caminho incremental do tick também preenche
+    `derived_hash` (antes coluna morta) — hash do corpo servido, igual
+    ao que `reindex` grava para o mesmo arquivo."""
+    home = _home(tmp_path)
+    body = "Corpo do grao.\n"
+    (home.inbox / "dep.md").write_text(
+        f"---\nid: 01TH\ntitle: Depositada\n---\n{body}", encoding="utf-8")
+    curate_tick(home)
+    con = connect(home)
+    row = con.execute(
+        "SELECT derived_hash FROM entries WHERE id='01TH'").fetchone()
+    assert row[0] == hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
+def test_tick_mirror_carries_source_path_and_derived_from(tmp_path):
+    """Espelho catalogado pelo tick leva `source_path`/`derived_from` do
+    frontmatter pro índice — mortas desde a v10, viram coluna consultável
+    na v11."""
+    home = _home(tmp_path)
+    body = "Corpo espelhado."
+    content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    derived_from = "f" * 64
+    (home.inbox / "sk.md").write_text(
+        "---\nid: 01TS\ntype: skill\nenv: claude-code\ntitle: Skill X\n"
+        "description: d\nsource_key: claude-code:x\nsource_path: /tmp/x\n"
+        f"derived_from: {derived_from}\n"
+        f"created: 2026-01-01T00:00:00+00:00\ncontent_hash: {content_hash}\n"
+        f"---\n{body}", encoding="utf-8")
+    curate_tick(home)
+    con = connect(home)
+    row = con.execute(
+        "SELECT source_path, derived_from FROM entries WHERE id='01TS'"
+    ).fetchone()
+    assert tuple(row) == ("/tmp/x", derived_from)
+
+
 # ── tick sobre schema antigo sem carimbo (v1.1, F3) ───────────────────
 # Que `stamp_if_unversioned` não carimbe colunas velhas é unidade, e vive
 # em test_indexdb.py; aqui interessa a porta: o tick nem chega a escrever.
@@ -1325,3 +1385,548 @@ def test_preexisting_self_conflict_is_healed(tmp_path):
     dest = next(home.library.glob("curar*.md"))
     meta, _ = parse(dest.read_text())
     assert "conflicts_with" not in meta
+
+
+# ── v1.4 §F3: compactação de espelho sob o tick ─────────────────────
+# Cobre o design v1.4 (docs/superpowers/specs/2026-08-14-neurata-v1.4-
+# ciclo-de-vida-design.md): A11 (crash nos 5 pontos da ordem §4
+# converge), A14 (teto exato de 500/tick), a drenagem do no-op (D-4,
+# medido: 4,0% da amostra real não tem ganho) e a idempotência.
+#
+# `_FULL_BODY` tem 3 parágrafos sem heading: `make_summary` (sem
+# heading) usa só os 2 primeiros — ganho real garantido, diferente dos
+# corpos de parágrafo único usados no resto do arquivo (que são ponto
+# fixo/no-op).
+
+_FULL_BODY = (
+    "Primeiro paragrafo do corpo completo do espelho de teste, com "
+    "texto o bastante pra nao ficar vazio aqui mesmo.\n\n"
+    "Segundo paragrafo com mais informacao relevante que tambem "
+    "sobrevive no resumo mecanico gerado pelo make_summary.\n\n"
+    "Terceiro paragrafo que so existe no corpo completo — nunca "
+    "aparece no resumo, e é por isso que a compactação tem ganho "
+    "real aqui.\n"
+)
+
+
+def _seed_mirror(home, filename, entry_id, source_key, title, body):
+    """Cria um espelho direto na library (como `_lib_skill_entry`), mas
+    também seeda um registro `catalog` no journal com `dst` = seu path
+    — pra `_reconcile_journal_orphans` (T2) não o tratar como órfão
+    write-then-log. Sem isto, os testes de crash de compactação abaixo
+    ficariam acoplados à reconciliação de órfãos (preocupação
+    ortogonal): qualquer mutação manual do arquivo pós-`reindex`, feita
+    pra simular um estado de crash, divergiria de `derived_hash` no
+    índice e seria (corretamente, por outro motivo) quarentenada antes
+    de `_compact_mirrors` sequer rodar."""
+    _lib_skill_entry(home, filename, entry_id, source_key, title, body)
+    rel = f"library/{filename}"
+    seed_report = TickReport(tick="01SEEDJOURNAL0000000000000")
+    _write_journal(home, "01SEEDJOURNAL0000000000000", "catalog", entry_id,
+                  None, rel, seed_report,
+                  content_hash=hashlib.sha256(body.encode("utf-8")).hexdigest())
+    reindex(home)
+
+
+def test_compact_crash_after_archive_put_recovers(tmp_path):
+    """Ponto 1 do §4: crash logo após `archive.put`, antes da escrita do
+    arquivo. Estado deixado: blob no archive, arquivo e índice intocados
+    (ainda com o corpo cheio original). Reconserto: `archive.put` é
+    content-addressed com dedup — a volta seguinte chama de novo com o
+    mesmo corpo e recebe o MESMO sha, sem blob duplicado nem corrupção
+    (spec §4, linha "archive.put" → "inócuo")."""
+    home = _home(tmp_path)
+    entry_id = "01MIRRORPT1000000000000"
+    _seed_mirror(home, "m1.md", entry_id, "claude-code:pt1", "M1",
+                _FULL_BODY)
+
+    pre_sha = archive.put(home, _FULL_BODY.encode("utf-8"))
+
+    report = curate_tick(home)
+
+    assert report.compacted == 1
+    assert report.errors == []
+    meta, body = parse((home.library / "m1.md").read_text())
+    assert body == make_summary(_FULL_BODY)
+    assert meta["derived_from"] == pre_sha
+    assert archive.get(home, meta["derived_from"]).decode("utf-8") == \
+        _FULL_BODY
+    con = connect(home)
+    row = con.execute(
+        "SELECT derived_from FROM entries WHERE id=?", (entry_id,)
+    ).fetchone()
+    assert row[0] == pre_sha
+
+
+def test_compact_crash_after_file_write_preserves_derived_from_on_retry(
+        tmp_path):
+    """Ponto 2 do §4 — o CRÍTICO: crash após a escrita do arquivo
+    (archive + `derived_from` corretos em disco), antes do índice.
+
+    Uma implementação ingênua que decidisse pelo `action` devolvido por
+    `compact()` (em vez de reler o que já está no arquivo) trataria o
+    "noop" que `compact()` devolve na retomada — `make_summary` do
+    summary já escrito é ponto fixo — como "sem ganho, do zero", re-
+    arquivando o SUMMARY como se fosse o corpo cheio e sobrescrevendo o
+    `derived_from` correto por um hash órfão. `_finish_mirror` evita
+    isso relendo o frontmatter e só tratando como "novo" o que ainda não
+    tem `derived_from`."""
+    home = _home(tmp_path)
+    entry_id = "01MIRRORPT2000000000000"
+    _seed_mirror(home, "m2.md", entry_id, "claude-code:pt2", "M2",
+                _FULL_BODY)
+    # índice: derived_from NULL, corpo == _FULL_BODY
+
+    true_sha = archive.put(home, _FULL_BODY.encode("utf-8"))
+    summary = make_summary(_FULL_BODY)
+    lib_path = home.library / "m2.md"
+    meta, _ = parse(lib_path.read_text())
+    meta = dict(meta)
+    meta["derived_from"] = true_sha
+    lib_path.write_text(serialize(meta, summary), encoding="utf-8")
+    # índice DELIBERADAMENTE não tocado — é exatamente o que um crash
+    # entre a escrita do arquivo e o índice deixa observável de fora.
+
+    report = curate_tick(home)
+
+    assert report.compacted == 1
+    assert report.errors == []
+    new_meta, new_body = parse(lib_path.read_text())
+    assert new_body == summary  # não regrediu, não recompactou do zero
+    assert new_meta["derived_from"] == true_sha  # a asserção crítica
+    assert archive.get(home, true_sha).decode("utf-8") == _FULL_BODY
+    con = connect(home)
+    row = con.execute(
+        "SELECT derived_from, derived_hash FROM entries WHERE id=?",
+        (entry_id,)).fetchone()
+    assert row[0] == true_sha
+    assert row[1] == hashlib.sha256(summary.encode("utf-8")).hexdigest()
+
+
+def test_index_write_without_commit_is_invisible_after_reconnect(tmp_path):
+    """Ponto 3 do §4: crash entre a escrita do índice (passo 3) e o
+    commit (passo 4). Não são dois estados observáveis diferentes: uma
+    escrita SQLite só fica visível após commit — uma conexão que morre
+    sem commitar não deixa rastro pra quem reconecta depois, então o
+    ponto 3 colapsa no mesmo estado recuperável do ponto 2 (índice
+    intocado). Este teste prova a premissa de atomicidade que sustenta
+    essa afirmação, direto contra o driver, sem depender de monkeypatch
+    frágil em `curate_tick`."""
+    home = _home(tmp_path)
+    body = "Corpo generico com id conhecido pro teste de atomicidade.\n"
+    entry_id = "01ATOMICTEST00000000000"
+    _lib_entry(home, "atomic.md", entry_id, "Atomic", body)
+    reindex(home)
+
+    con = connect(home)
+    con.execute("UPDATE entries SET derived_from=? WHERE id=?",
+               ("f" * 64, entry_id))
+    con.close()  # nunca commitou — a mudança some com a conexão
+
+    con2 = connect(home)
+    row = con2.execute(
+        "SELECT derived_from FROM entries WHERE id=?", (entry_id,)
+    ).fetchone()
+    assert row[0] is None
+
+
+def test_compact_crash_after_commit_before_journal_never_reprocesses(
+        tmp_path):
+    """Ponto 4 do §4: crash após o commit do índice, antes do journal —
+    arquivo, archive e índice já consistentes; só a linha "compact" no
+    journal nunca saiu (§4, linha "commit" → "`_reconcile_journal_
+    orphans` re-loga").
+
+    A releitura é via `catalog`/reconciled=write-then-log, não via
+    `compact`: o path já tem uma explicação de chegada na library
+    anterior a esta compactação (`_CATALOG_VERBS` não inclui "compact"
+    de propósito — ver docstring de `_compact_mirrors` em tick.py), e o
+    índice já mostra `derived_from` preenchido, então o predicado de
+    pendência (D-4) exclui o grão: a volta seguinte não reprocessa nem
+    sobrescreve o hash correto. A única perda é a linha informativa
+    "compact" em si — não a consistência arquivo+índice, que é o que a
+    convergência promete."""
+    home = _home(tmp_path)
+    entry_id = "01MIRRORPT4000000000000"
+    _seed_mirror(home, "m4.md", entry_id, "claude-code:pt4", "M4",
+                _FULL_BODY)
+    lib_path = home.library / "m4.md"
+
+    sha = archive.put(home, _FULL_BODY.encode("utf-8"))
+    summary = make_summary(_FULL_BODY)
+    meta, _ = parse(lib_path.read_text())
+    meta = dict(meta)
+    meta["derived_from"] = sha
+    lib_path.write_text(serialize(meta, summary), encoding="utf-8")
+    con = connect(home)
+    _index_delete(con, entry_id)
+    _index_insert(con, meta, summary, "library/m4.md", "library", "m4")
+    con.commit()
+    con.close()
+    # journal deliberadamente vazio pra este grão — reproduz o "sem
+    # journal" da tabela §4.
+
+    report = curate_tick(home)
+
+    assert report.compacted == 0  # já tinha derived_from: fora do predicado
+    assert report.errors == []
+    final_meta, final_body = parse(lib_path.read_text())
+    assert final_meta["derived_from"] == sha
+    assert final_body == summary
+    assert not any(r.get("item") == entry_id and r["verb"] == "compact"
+                  for r in _journal(home))
+
+
+def test_second_tick_does_not_recompact_already_compacted_mirror(tmp_path):
+    """Ponto 5 do §4 (sem crash — sucesso completo) + idempotência: uma
+    segunda volta sobre um espelho já compactado não recompacta, não
+    reescreve arquivo/índice e não duplica journal."""
+    home = _home(tmp_path)
+    entry_id = "01MIRRORIDEMP00000000000"
+    _lib_skill_entry(home, "idemp.md", entry_id, "claude-code:idemp",
+                     "Idemp", _FULL_BODY)
+    reindex(home)
+
+    report1 = curate_tick(home)
+    assert report1.compacted == 1
+    lib_path = home.library / "idemp.md"
+    meta1, body1 = parse(lib_path.read_text())
+    journal1 = _journal(home)
+
+    report2 = curate_tick(home)
+
+    assert report2.compacted == 0
+    meta2, body2 = parse(lib_path.read_text())
+    assert meta2 == meta1
+    assert body2 == body1
+    assert _journal(home) == journal1  # nada novo gravado
+
+
+def test_noop_mirror_drains_pending_predicate_and_stays_drained(tmp_path):
+    """O fato medido nesta versão: 4,0% dos espelhos reais não têm ganho
+    (`summary == corpo`) — `compact()` devolve `action=noop` e NÃO
+    escreve `derived_from` sozinho. Sem o passo do tick persistir a
+    marca mesmo aqui, esses grãos nunca sairiam do predicado de
+    pendência e encheriam o teto de 500 pra sempre (D-4). Este teste
+    prova especificamente isso: um espelho cujo corpo já é seu próprio
+    resumo sai do predicado depois de um tick e NÃO reaparece no
+    seguinte."""
+    home = _home(tmp_path)
+    body = "Corpo de paragrafo unico que ja e o proprio resumo mecanico.\n"
+    entry_id = "01MIRRORNOOP0000000000000"
+    _lib_skill_entry(home, "noop.md", entry_id, "claude-code:noop", "Noop",
+                     body)
+    reindex(home)
+    con = connect(home)
+    pending = con.execute(
+        "SELECT 1 FROM entries WHERE id=? AND regime='mirror' AND"
+        " derived_from IS NULL", (entry_id,)).fetchone()
+    assert pending is not None  # começa pendente
+
+    report1 = curate_tick(home)
+
+    assert report1.compacted == 1
+    con = connect(home)
+    row = con.execute(
+        "SELECT derived_from FROM entries WHERE id=?", (entry_id,)
+    ).fetchone()
+    assert row[0] is not None
+    meta, body_after = parse((home.library / "noop.md").read_text())
+    assert body_after == body  # sem ganho: corpo servido não muda
+    assert meta["derived_from"] == row[0]
+
+    report2 = curate_tick(home)
+
+    assert report2.compacted == 0
+    con = connect(home)
+    still_pending = con.execute(
+        "SELECT 1 FROM entries WHERE id=? AND regime='mirror' AND"
+        " derived_from IS NULL", (entry_id,)).fetchone()
+    assert still_pending is None
+
+
+def test_compact_mirrors_respects_cap_of_500_per_tick(tmp_path):
+    """A14: com N > 500 espelhos pendentes, uma volta compacta exatamente
+    500 — o teto do D-4 (retomada é a própria consulta, sem cursor)."""
+    home = _home(tmp_path)
+    n = 505
+    for i in range(n):
+        body = (f"Corpo do espelho numero {i} com texto o bastante "
+                f"pra nao ficar vazio no teste de teto.\n")
+        _lib_skill_entry(home, f"m{i:04d}.md", f"01MIRRORCAP{i:014d}",
+                         f"claude-code:cap{i}", f"Cap {i}", body)
+    reindex(home)
+
+    report1 = curate_tick(home)
+
+    assert report1.compacted == 500
+    con = connect(home)
+    remaining = con.execute(
+        "SELECT COUNT(*) FROM entries WHERE regime='mirror' AND"
+        " derived_from IS NULL").fetchone()[0]
+    assert remaining == n - 500
+
+    report2 = curate_tick(home)
+
+    assert report2.compacted == n - 500
+    con = connect(home)
+    remaining2 = con.execute(
+        "SELECT COUNT(*) FROM entries WHERE regime='mirror' AND"
+        " derived_from IS NULL").fetchone()[0]
+    assert remaining2 == 0
+
+
+def test_reconcile_journal_orphans_checks_derived_hash_not_content_hash(
+        tmp_path):
+    """Regressão do design v1.4 §2/D-1: `_reconcile_journal_orphans`
+    passou a conferir `derived_hash` (corpo SERVIDO), não `content_hash`
+    (corpo da FONTE) — os dois DIVERGEM por construção pra um espelho já
+    compactado. Simula um grão compactado numa sessão anterior (arquivo
+    já é o summary + `derived_from`) cujo `content_hash` indexado
+    deliberadamente não bate com o corpo em disco (como seria o caso
+    real: `content_hash` é o hash do corpo CHEIO, nunca tocado pela
+    compactação), mas cujo `derived_hash` bate. Antes do fix, isso
+    quarentenaria todo espelho compactado que passasse por aqui sem
+    nunca ter sido logado; depois do fix, reconcilia normal."""
+    home = _home(tmp_path)
+    summary = make_summary(_FULL_BODY)
+    entry_id = "01MIRRORDHASH000000000000"
+    sha = archive.put(home, _FULL_BODY.encode("utf-8"))
+    _lib_skill_entry(home, "dhash.md", entry_id, "claude-code:dhash",
+                     "DHash", summary)
+    lib_path = home.library / "dhash.md"
+    meta, _ = parse(lib_path.read_text())
+    meta = dict(meta)
+    meta["derived_from"] = sha
+    lib_path.write_text(serialize(meta, summary), encoding="utf-8")
+    reindex(home)  # derived_hash = sha256(summary) — correto
+
+    con = connect(home)
+    content_hash_source = hashlib.sha256(
+        _FULL_BODY.encode("utf-8")).hexdigest()
+    con.execute("UPDATE entries SET content_hash=? WHERE id=?",
+               (content_hash_source, entry_id))
+    con.commit()
+
+    report = curate_tick(home)
+
+    assert report.reconciled == 1
+    assert report.quarantined == 0
+    assert list(home.quarantine.glob("*.md")) == []
+    journal = _journal(home)
+    rec = next(r for r in journal if r["item"] == entry_id and
+              r["verb"] == "catalog")
+    assert rec.get("reconciled") == "write-then-log"
+
+
+def test_sync_update_in_place_clears_stale_derived_from_and_recompacts(
+        tmp_path):
+    """Regressão: `_sync_update_in_place` limpa `derived_from` velho ao
+    absorver um corpo novo via skill-item — sem isso o arquivo ficaria
+    com corpo novo cru + marca de derivação do corpo ANTIGO
+    (`expand --restore` restauraria o full errado). `_compact_mirrors`,
+    mais adiante NO MESMO tick, recompacta o corpo novo do zero e
+    escreve um `derived_from` correto, diferente do velho."""
+    home = _home(tmp_path)
+    entry_id = "01MIRRORSYNCFIX000000000"
+    _lib_skill_entry(home, "sync.md", entry_id, "claude-code:sync", "Sync",
+                     _FULL_BODY)
+    reindex(home)
+    r1 = curate_tick(home)
+    assert r1.compacted == 1
+    meta1, body1 = parse((home.library / "sync.md").read_text())
+    old_derived_from = meta1["derived_from"]
+    assert old_derived_from
+    assert body1 == make_summary(_FULL_BODY)
+
+    new_full_body = (
+        "Paragrafo novo numero um do corpo atualizado pela skill de "
+        "novo, bem diferente do anterior.\n\n"
+        "Paragrafo novo numero dois que tambem sobrevive no resumo "
+        "novo gerado a partir deste corpo atualizado.\n\n"
+        "Paragrafo novo numero tres que so existe no corpo completo "
+        "novo, garantindo ganho real de novo na recompactação.\n"
+    )
+    _skill_item(home, "sync-new.md", "01SYNCINBOXNEW000000000",
+               "claude-code:sync", "Sync", new_full_body)
+
+    report2 = curate_tick(home)
+
+    assert report2.updated == 1
+    assert report2.compacted == 1  # F3 recompactou o corpo novo na mesma volta
+    meta2, body2 = parse((home.library / "sync.md").read_text())
+    assert body2 == make_summary(new_full_body)
+    assert body2 != body1
+    new_derived_from = meta2.get("derived_from")
+    assert new_derived_from
+    assert new_derived_from != old_derived_from  # sem marca velha sobrando
+    assert archive.get(home, new_derived_from).decode("utf-8") == \
+        new_full_body
+    assert archive.get(home, old_derived_from).decode("utf-8") == _FULL_BODY
+
+
+def test_compact_failure_on_one_mirror_does_not_crash_tick_or_others(
+        tmp_path, monkeypatch):
+    """Um espelho cujo `compact()` explode não derruba o tick nem os
+    demais grãos: fica registrado em `report.errors`, segue pendente
+    (nada foi escrito — `_finish_mirror` nunca roda pra ele) e o journal
+    não ganha linha nenhuma pra ele. O grão saudável no mesmo tick
+    compacta normalmente. Numa volta seguinte sem a falha, o pendente
+    que sobrou compacta também — nada corrompeu."""
+    home = _home(tmp_path)
+    body_bad = "Corpo do espelho que vai falhar ao compactar de proposito.\n"
+    body_ok = "Corpo do espelho que compacta normal sem problema nenhum.\n"
+    bad_id = "01MIRRORBAD000000000000"
+    ok_id = "01MIRRORFINE00000000000"
+    _lib_skill_entry(home, "bad.md", bad_id, "claude-code:bad", "Bad",
+                     body_bad)
+    _lib_skill_entry(home, "ok.md", ok_id, "claude-code:ok", "Ok", body_ok)
+    reindex(home)
+
+    real_compact = __import__("neurata.compact", fromlist=["compact"]).compact
+
+    def flaky_compact(home_arg, ref, reindex_after=True):
+        if ref == bad_id:
+            raise RuntimeError("falha simulada de compactação")
+        return real_compact(home_arg, ref, reindex_after=reindex_after)
+
+    monkeypatch.setattr("neurata.tick.compact", flaky_compact)
+
+    report = curate_tick(home)
+
+    assert report.compacted == 1  # só o ok.md
+    assert any("falha ao compactar" in e.reason for e in report.errors)
+    con = connect(home)
+    row_bad = con.execute(
+        "SELECT derived_from FROM entries WHERE id=?", (bad_id,)).fetchone()
+    assert row_bad[0] is None  # continua pendente, nada foi escrito
+    row_ok = con.execute(
+        "SELECT derived_from FROM entries WHERE id=?", (ok_id,)).fetchone()
+    assert row_ok[0] is not None
+    journal = _journal(home)
+    assert not any(r.get("item") == bad_id and r["verb"] == "compact"
+                  for r in journal)
+
+    monkeypatch.undo()
+    report2 = curate_tick(home)
+
+    assert report2.compacted == 1  # o pendente que sobrou compacta normal
+    con = connect(home)
+    row_bad2 = con.execute(
+        "SELECT derived_from FROM entries WHERE id=?", (bad_id,)).fetchone()
+    assert row_bad2[0] is not None
+
+
+# ── v1.4 §F3: guard de frieza (espelho que a busca usa não é compactado) ──
+
+
+def _mirror(home, n, body=None):
+    """Espelho pendente pronto pra compactar. Devolve o entry_id."""
+    eid = f"01MIRRORHOT{n:014d}"
+    _lib_skill_entry(home, f"hot{n}.md", eid, f"claude-code:hot{n}",
+                     f"Hot {n}", body or (
+                         "## Secao\n\nPrimeiro paragrafo que sobrevive ao "
+                         "summary.\n\nSegundo paragrafo, esse a compactacao "
+                         "descarta e por isso o corpo encolhe.\n"))
+    return eid
+
+
+def test_compact_skips_mirror_the_search_uses(tmp_path):
+    """§F3: espelho com >= 2 usos registrados não é compactado — medido
+    em 2026-08-14: compactar derruba do top-10 grão que a busca usava."""
+    home = _home(tmp_path)
+    eid = _mirror(home, 1)
+    reindex(home)
+    log_event(home, "query", eid, query="algo", rank=1)
+    log_event(home, "query", eid, query="outra", rank=3)
+
+    report = curate_tick(home)
+
+    assert report.compacted == 0
+    con = connect(home)
+    derived = con.execute("SELECT derived_from FROM entries WHERE id=?",
+                         (eid,)).fetchone()[0]
+    assert derived is None
+
+
+def test_compact_takes_mirror_below_hit_threshold(tmp_path):
+    """Um acesso só não protege: o limiar é 2, não 1 (senão a primeira
+    impressão de qualquer grão congelaria o acervo inteiro)."""
+    home = _home(tmp_path)
+    eid = _mirror(home, 2)
+    reindex(home)
+    log_event(home, "query", eid, query="algo", rank=9)
+
+    report = curate_tick(home)
+
+    assert report.compacted == 1
+
+
+def test_expand_counts_toward_hit_threshold(tmp_path):
+    """Abrir o grão (expand) é sinal de uso mais forte que aparecer numa
+    lista (query); os dois somam pro limiar."""
+    home = _home(tmp_path)
+    eid = _mirror(home, 3)
+    reindex(home)
+    log_event(home, "query", eid, query="algo", rank=1)
+    log_event(home, "expand", eid)
+
+    assert curate_tick(home).compacted == 0
+
+
+def test_hot_mirror_does_not_burn_cap_slot(tmp_path, monkeypatch):
+    """O filtro entra antes do LIMIT: com teto de 1, o espelho quente não
+    pode consumir a vaga e deixar o frio pra próxima volta — senão a
+    compactação anda mais devagar a cada volta, queimando as mesmas vagas
+    nos mesmos grãos."""
+    home = _home(tmp_path)
+    quente = _mirror(home, 4)
+    frio = _mirror(home, 5)
+    reindex(home)
+    log_event(home, "query", quente, query="algo", rank=1)
+    log_event(home, "query", quente, query="outra", rank=2)
+    monkeypatch.setattr("neurata.tick._COMPACT_LIMIT", 1)
+
+    report = curate_tick(home)
+
+    assert report.compacted == 1
+    con = connect(home)
+    assert con.execute("SELECT derived_from FROM entries WHERE id=?",
+                      (frio,)).fetchone()[0] is not None
+    assert con.execute("SELECT derived_from FROM entries WHERE id=?",
+                      (quente,)).fetchone()[0] is None
+
+
+def test_null_entry_id_in_usage_log_does_not_disable_compaction(tmp_path):
+    """Regressão: `id NOT IN (<lista com NULL>)` é NULL pra toda linha em
+    SQL de três valores. Uma linha `entry_id: null` no log zeraria os
+    candidatos e desligaria a compactação em silêncio, pra sempre."""
+    home = _home(tmp_path)
+    _mirror(home, 6)
+    reindex(home)
+    with (home.logs / "usage.jsonl").open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"ts": "2026-08-14T00:00:00+00:00",
+                             "event": "query", "entry_id": None,
+                             "query": "x", "rank": 1}) + "\n")
+
+    assert curate_tick(home).compacted == 1
+
+
+def test_compaction_skipped_when_usage_log_unreadable(tmp_path,
+                                                      monkeypatch):
+    """Falha fechada: sem saber o que a busca usa, compactar é apostar
+    contra o recall. Pular só adia disco; compactar às cegas rebaixa grão
+    quente e só volta atrás por expand manual."""
+    home = _home(tmp_path)
+    _mirror(home, 7)
+    reindex(home)
+
+    def explode(_home):
+        raise OSError("disco de log ilegivel")
+
+    monkeypatch.setattr("neurata.tick.read_usage", explode)
+
+    report = curate_tick(home)
+
+    assert report.compacted == 0
+    assert any("uso ilegível" in e.reason for e in report.errors)

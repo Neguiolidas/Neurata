@@ -15,6 +15,7 @@ import pytest
 from conftest import (
     forge_v7_entries,
     forge_v9_edges,
+    forge_v10_entries,
     insert_entry,
     set_index_version,
 )
@@ -558,14 +559,18 @@ def test_v10_descarta_aresta_pendurada(tmp_path):
 
 
 def test_v10_nao_inventa_dado_no_eixo_de_memoria(tmp_path):
-    """As colunas novas nascem `NULL`: quem preenche é a re-derivação."""
+    """`class`/`source_path` não têm backfill em SQL puro: nascem `NULL`,
+    quem preenche é a re-derivação. `derived_hash` é a exceção deliberada
+    da v11 (backfill seguro com o archive vazio, ver seção v10 → v11
+    abaixo) — não entra nesta asserção porque, ao contrário das outras
+    duas, é para sair preenchido daqui."""
     home, con = _v9(tmp_path)
     insert_entry(con, "a", "a", _write_grain(home, "a.md", "title: A\n"), "A")
 
     migrate_if_needed(con, home)
 
-    assert con.execute("SELECT class, source_path, derived_hash FROM entries"
-                       " WHERE id='a'").fetchone() == (None, None, None)
+    assert con.execute("SELECT class, source_path FROM entries"
+                       " WHERE id='a'").fetchone() == (None, None)
 
 
 def test_v10_deixa_indice_indistinguivel_de_um_novo(tmp_path):
@@ -579,3 +584,94 @@ def test_v10_deixa_indice_indistinguivel_de_um_novo(tmp_path):
 
     assert forma(con) == forma(novo)
     assert schema_state(con) == "current"
+
+
+# ---------------------------------------------------------------- v10 → v11
+
+
+def _v10(tmp_path) -> "tuple[NeurataHome, sqlite3.Connection]":
+    """Índice com a DDL da v10 forjada de verdade: `derived_from` ainda não
+    é coluna (só chega na v11), então o `ALTER TABLE` da migração é
+    exercido de verdade, não pulado por já existir via `connect()`."""
+    home = _home(tmp_path)
+    con = connect(home)
+    forge_v10_entries(con)
+    set_index_version(con, 10)
+    return home, con
+
+
+def test_v11_backfills_derived_hash_from_content_hash(tmp_path):
+    """O objetivo 4 do PRD: `derived_hash` sai de 0/N preenchida para
+    N/N, com o valor correto — o archive está vazio, então corpo servido
+    == corpo da fonte para toda linha pré-v1.4."""
+    home, con = _v10(tmp_path)
+    insert_entry(con, "a", "a", _write_grain(home, "a.md", "title: A\n"),
+                "A", content_hash="h" * 64)
+    insert_entry(con, "b", "b", _write_grain(home, "b.md", "title: B\n"),
+                "B", content_hash="i" * 64)
+
+    assert migrate_if_needed(con, home) == INDEX_SCHEMA_VERSION
+
+    rows = con.execute(
+        "SELECT id, content_hash, derived_hash FROM entries"
+        " ORDER BY id").fetchall()
+    assert rows == [("a", "h" * 64, "h" * 64), ("b", "i" * 64, "i" * 64)]
+
+
+def test_v11_leaves_source_path_null(tmp_path):
+    """Consequência declarada da spec §5.3: sem backfill em SQL puro,
+    `source_path` só ganha dado no próximo `reindex` full."""
+    home, con = _v10(tmp_path)
+    insert_entry(con, "a", "a", _write_grain(home, "a.md", "title: A\n"), "A")
+
+    migrate_if_needed(con, home)
+
+    assert con.execute(
+        "SELECT source_path FROM entries WHERE id='a'"
+    ).fetchone()[0] is None
+
+
+def test_v11_aborts_if_derived_from_already_populated(tmp_path):
+    """Guarda de segurança da migração (spec §5.3): o backfill de
+    `derived_hash := content_hash` só é correto com o archive vazio (nenhum
+    grão compactado). Se `derived_from` já viesse preenchido — sinal de que
+    essa premissa morreu —, aplicar o backfill mesmo assim corromperia
+    `derived_hash` de um grão cujo corpo servido já não é o da fonte.
+    Simula o estado via coluna pendurada (mesmo padrão de
+    `test_migration_resumes_over_dangling_columns`): não há caminho real
+    pra chegar em v10 com `derived_from` já preenchido, mas a migração
+    tem de recusar mesmo assim, em vez de confiar cegamente na premissa."""
+    home, con = _v10(tmp_path)
+    insert_entry(con, "a", "a", _write_grain(home, "a.md", "title: A\n"), "A")
+    con.execute("ALTER TABLE entries ADD COLUMN derived_from TEXT")
+    con.execute("UPDATE entries SET derived_from=? WHERE id='a'",
+               ("f" * 64,))
+    con.commit()
+
+    with pytest.raises(IndexSchemaError, match="derived_from"):
+        migrate_if_needed(con, home)
+
+    assert schema_state(con) == "mismatch"
+    # nada foi tocado: nem o carimbo, nem o `derived_hash` (que seguiria
+    # NULL, não `content_hash` inventado por cima da premissa quebrada).
+    assert con.execute(
+        "SELECT derived_hash FROM entries WHERE id='a'"
+    ).fetchone()[0] is None
+
+
+def test_v11_migration_is_idempotent(tmp_path):
+    """Rodar de novo não pode reescrever nada: a 2ª chamada devolve `None`
+    (nada migrado) e o `derived_hash` editado à mão sobrevive — mesmo
+    contrato de `test_second_migration_is_a_noop`, agora para v10→v11."""
+    home, con = _v10(tmp_path)
+    insert_entry(con, "a", "a", _write_grain(home, "a.md", "title: A\n"),
+                "A", content_hash="h" * 64)
+    migrate_if_needed(con, home)
+    con.execute("UPDATE entries SET derived_hash=? WHERE id='a'",
+               ("editado" + "0" * 57,))
+    con.commit()
+
+    assert migrate_if_needed(con, home) is None
+    assert con.execute(
+        "SELECT derived_hash FROM entries WHERE id='a'"
+    ).fetchone()[0] == "editado" + "0" * 57

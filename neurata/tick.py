@@ -18,7 +18,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
-from neurata import indexdb
+from neurata import archive, indexdb
+from neurata.compact import _atomic_write, compact
 from neurata.dedup import NEAR_DUP_JACCARD, jaccard, shingle_hashes
 from neurata.frontmatter import FrontmatterError, parse, serialize
 from neurata.home import NeurataHome
@@ -35,6 +36,7 @@ from neurata.indexdb import (
 from neurata.snapshot import commit_tick, ensure_repo
 from neurata.textnorm import slugify
 from neurata.ulid import new_ulid
+from neurata.usage import read_usage
 
 
 class TickStructuralError(RuntimeError):
@@ -59,6 +61,7 @@ class TickReport:
     stale: int = 0       # tombstone marcou entry como stale (§5)
     reconciled: int = 0  # órfãos write-then-log adotados via re-log (T2)
     absorbed: int = 0    # edição na mão em library/ absorvida (v1.2, §D8)
+    compacted: int = 0   # espelhos compactados neste tick (v1.4, §F3)
     errors: "list[ItemError]" = field(default_factory=list)
     duration_ms: int = 0
     snapshot: "str | None" = None  # sha do commit deste tick, ou None (v0.6)
@@ -96,6 +99,8 @@ def curate_tick(home: NeurataHome, budget: "int | None" = None) -> TickReport:
             shingle_sets = dict(indexdb.load_shingle_sets(con))
             for path in items:
                 _process_item(home, con, tick_id, path, report, shingle_sets)
+
+            _compact_mirrors(home, con, tick_id, report)
 
             indexdb.stamp_if_unversioned(con)
         finally:
@@ -328,6 +333,14 @@ def _sync_update_in_place(home: NeurataHome, con, tick_id: str, *,
             merged[key] = new_meta[key]
     merged.pop("stale", None)
     merged.pop("stale_since", None)
+    # `derived_from` do meta antigo apontaria pro corpo compactado ANTERIOR
+    # — o corpo novo que acabou de chegar via skill-item não tem relação com
+    # aquela derivação. Sem isto o arquivo ficaria com corpo novo + marca de
+    # derivação velha (inconsistente: `expand --restore` restauraria o full
+    # errado). `_compact_mirrors`, mais adiante NO MESMO tick, recompacta
+    # este corpo do zero e escreve um `derived_from` correto se for o caso
+    # (v1.4, decisão além da spec — ver relatório da Fase 3).
+    merged.pop("derived_from", None)
     content_hash = hashlib.sha256(new_body.encode("utf-8")).hexdigest()
     merged["content_hash"] = content_hash
     merged["updated"] = _now()
@@ -694,21 +707,27 @@ def _reconcile_journal_orphans(home: NeurataHome, con, tick_id: str,
 
     Detecta cruzando `entries` (location='library') com os `dst` já
     vistos no journal. Pra cada entrada sem par: se o conteúdo em
-    disco ainda bate com id + content_hash do índice, é seguro assumir
+    disco ainda bate com id + derived_hash do índice, é seguro assumir
     que foi só o log que faltou — adota, re-logando agora a entrada
     (`catalog` marcado `reconciled`). Se não bate (frontmatter
     corrompido, id trocado, conteúdo alterado por fora do fluxo), não
     é seguro presumir a origem — move pra quarantine; NUNCA deleta o
     arquivo. Idempotente: uma vez re-logado (ou quarentenado), o
     próximo tick já encontra o `dst` no journal (ou o arquivo não está
-    mais em library/) e não repete a ação."""
+    mais em library/) e não repete a ação.
+
+    Confere `derived_hash` (corpo SERVIDO), não `content_hash` (corpo
+    da FONTE, v1.4 §2/D-1): pra um espelho já compactado os dois
+    divergem por construção, e conferir `content_hash` quarentenaria
+    todo espelho compactado que passasse por aqui sem jamais ter sido
+    logado."""
     rows = con.execute(
-        "SELECT rowid, id, path, content_hash FROM entries"
+        "SELECT rowid, id, path, derived_hash FROM entries"
         " WHERE location='library'").fetchall()
     if not rows:
         return
     logged = _logged_catalog_dsts(home)
-    for rowid, eid, path, chash in rows:
+    for rowid, eid, path, dhash in rows:
         if path in logged:
             continue
         full = home.root / path
@@ -723,13 +742,13 @@ def _reconcile_journal_orphans(home: NeurataHome, con, tick_id: str,
             meta, actual_hash = {}, None
 
         id_matches = str(meta.get("id", "")) == str(eid)
-        # sem content_hash indexado (campo ausente no frontmatter na
+        # sem derived_hash indexado (campo ausente no frontmatter na
         # época da adoção): nao há o que conferir além do id — mesmo
         # padrão já usado pela adoção de órfãos do §3.
-        hash_ok = (not chash) or actual_hash == chash
+        hash_ok = (not dhash) or actual_hash == dhash
         if id_matches and hash_ok:
             ok = _journal(home, tick_id, "catalog", eid, None, path, report,
-                         content_hash=chash, reconciled="write-then-log")
+                         derived_hash=dhash, reconciled="write-then-log")
             if ok:
                 report.reconciled += 1
                 report.processed += 1
@@ -741,6 +760,160 @@ def _reconcile_journal_orphans(home: NeurataHome, con, tick_id: str,
                       " arquivo preservado")
             _quarantine(home, tick_id, full, report, reason=reason,
                        mark_error=True, item_id=eid)
+
+
+# ── v1.4 §F3: compactação de espelho (corpo → summary, full no archive) ──
+
+_COMPACT_LIMIT = 500
+
+# Espelho que a busca já devolveu (query) ou o usuário já abriu (expand)
+# `_COMPACT_MIN_HITS` vezes não é compactado. Medido em 2026-08-14 sobre
+# as 147 consultas reais do usage.jsonl: dos 26 espelhos compactados que
+# apareciam no top-10, 10 caíram fora dele. A perda é de ranking, não de
+# vocabulário — o termo continua no corpo, a frequência dele é que cai —,
+# então guardar os termos raros no disco não resolve (testado: recupera
+# 2 das 10). O limiar 2 evita 9 das 10 perdas e projeta o corpo em
+# 12,64 MiB, contra 9,69 MiB compactando tudo. Ver PRD v1.4, SC1.
+_COMPACT_MIN_HITS = 2
+
+
+def _compact_mirrors(home: NeurataHome, con, tick_id: str,
+                     report: TickReport) -> None:
+    """Passo final do tick (design v1.4 §3/§4): compacta espelhos
+    pendentes, até um teto por volta. Pendente = `regime='mirror' AND
+    derived_from IS NULL` (D-4) — a retomada é a própria consulta, sem
+    cursor: interromper a meio e rodar de novo converge sozinho (a
+    idempotência sai do ponto fixo de `make_summary`, ver
+    `_finish_mirror`).
+
+    `grain_quality != 'refined'` não está na letra da spec (D-4 diz só
+    `regime='mirror' AND derived_from IS NULL`). Sem esta cláusula, um
+    espelho `refined` — que `compact()` recusa por monotonicidade (o
+    Miner mecânico não rebaixa o que o DeepMiner refinou) — bateria o
+    predicado de pendência PRA SEMPRE: `compact()` devolveria
+    `action='refused'` a cada volta, nunca escreveria `derived_from`, e
+    o grão consumiria uma vaga do teto em toda volta seguinte. É a
+    mesma forma do bug do no-op que o D-4 já resolve, disparada pela
+    recusa em vez do no-op; excluir aqui evita o loop e poupa o custo
+    de resolver/ler o arquivo pra um grão já sabidamente recusado.
+    """
+    try:
+        hot = _hot_ids(home)
+    # Sem saber o que a busca usa, compactar é apostar contra o recall.
+    # Pular a volta só adia disco; compactar às cegas rebaixa grão quente
+    # e só volta atrás por `expand` manual. Falha fechada, de propósito.
+    except OSError as exc:
+        report.errors.append(ItemError("compact", f"uso ilegível: {exc}"))
+        return
+    # O filtro entra no SQL, antes do LIMIT: se fosse depois, um espelho
+    # quente consumiria vaga do teto e a compactação andaria mais devagar
+    # a cada volta, com as mesmas vagas queimadas nos mesmos grãos.
+    # NOT NULL não é decoração: `id NOT IN (<lista com NULL>)` é NULL pra
+    # toda linha em SQL de três valores, então um único `entry_id: null`
+    # no log zeraria os candidatos e desligaria a compactação em silêncio,
+    # pra sempre. Com NOT NULL + INSERT OR IGNORE a linha ruim é descartada.
+    con.execute("CREATE TEMP TABLE IF NOT EXISTS _compact_hot(id TEXT"
+                " PRIMARY KEY NOT NULL)")
+    con.execute("DELETE FROM _compact_hot")
+    con.executemany("INSERT OR IGNORE INTO _compact_hot VALUES (?)",
+                    [(i,) for i in hot])
+    rows = con.execute(
+        "SELECT id, slug FROM entries WHERE regime='mirror' AND"
+        " derived_from IS NULL AND grain_quality != 'refined'"
+        " AND id NOT IN (SELECT id FROM _compact_hot)"
+        " LIMIT ?", (_COMPACT_LIMIT,)).fetchall()
+    for eid, slug in rows:
+        _compact_one_mirror(home, con, tick_id, str(eid), slug, report)
+
+
+def _hot_ids(home: NeurataHome) -> "set[str]":
+    """Espelhos com uso registrado >= `_COMPACT_MIN_HITS` (§F3).
+
+    Lê `logs/usage.jsonl` inteiro a cada volta — `read_usage` já pula
+    linha corrompida sem explodir. É O(tamanho do log) por tick: barato
+    nos ~7,5k eventos de hoje, e o dia em que não for pede agregação
+    incremental, não um cache aqui.
+    """
+    agg = read_usage(home)["entries"]
+    return {eid for eid, s in agg.items()
+            if isinstance(eid, str) and eid
+            and s["impressions"] + s["expands"] >= _COMPACT_MIN_HITS}
+
+
+def _compact_one_mirror(home: NeurataHome, con, tick_id: str, eid: str,
+                        slug: str, report: TickReport) -> None:
+    try:
+        result = compact(home, eid, reindex_after=False)
+    # `compact()` atravessa entryref/archive/frontmatter, fora deste
+    # módulo, com falhas que não dá pra enumerar aqui (frontmatter
+    # corrompido, arquivo sumido por corrida entre o SELECT e esta
+    # chamada, etc.). Um espelho com problema não pode derrubar a volta
+    # inteira nem os grãos seguintes — mesma contenção já usada pelo
+    # commit do snapshot em curate_tick. Nenhum estado foi escrito
+    # ainda (compact() só grava depois de decidir), então o grão segue
+    # pendente e a próxima volta tenta de novo; journal fica intocado.
+    except Exception as exc:  # noqa: BLE001
+        report.errors.append(ItemError(slug, f"falha ao compactar: {exc}"))
+        return
+    if result["action"] == "refused":
+        return  # grain_quality virou 'refined' entre o SELECT e aqui
+    _finish_mirror(home, con, tick_id, result["path"], slug, report)
+
+
+def _finish_mirror(home: NeurataHome, con, tick_id: str, rel: str,
+                   slug: str, report: TickReport) -> None:
+    """Steps 3-5 do algoritmo §4 (índice → commit → journal), sobre o
+    arquivo que `compact()` (ou a volta anterior, se houve crash) já
+    deixou correto em disco. Nunca decide com base em `result["action"]`
+    — sempre relê o frontmatter atual do arquivo e decide pelo que
+    encontra lá, porque só isso distingue os dois formatos de "noop":
+
+    - **noop genuíno** (D-4): summary == corpo, `compact()` não achou
+      ganho e não tocou o arquivo — `derived_from` ainda ausente. É
+      aqui que a marca é persistida mesmo sem ganho, senão o grão nunca
+      sai do predicado de pendência (medido: 4,0% da amostra real,
+      ~590 grãos no acervo — mais que o teto de 500; spec D-4).
+    - **crash já reparado** (§4, linha "escrita do arquivo"): uma volta
+      anterior já escreveu corpo+`derived_from` corretos e morreu antes
+      de indexar; `compact()`, chamado de novo agora, vê o arquivo já
+      compactado, `make_summary` bate ponto fixo contra si mesmo e
+      devolve `noop` outra vez — mas o `derived_from` já em disco é o
+      CORRETO (aponta pro full original). Reescrever aqui destruiria
+      essa referência e trocaria por `sha256(summary)`, órfão do full
+      real: por isso o teste é "já tem `derived_from`?", nunca
+      "`action` veio noop?" — as duas situações têm o mesmo `action`
+      mas exigem tratamento oposto.
+    """
+    full = home.root / rel
+    try:
+        meta, body = parse(full.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, FrontmatterError) as exc:
+        report.errors.append(ItemError(rel, f"transiente (I/O): {exc}"))
+        return
+
+    if not meta.get("derived_from"):
+        try:
+            sha = archive.put(home, body.encode("utf-8"))  # 1º: archive
+            meta = dict(meta)
+            meta["derived_from"] = sha
+            meta["updated"] = _now()
+            _atomic_write(full, serialize(meta, body))       # 2º: arquivo
+        except OSError as exc:
+            report.errors.append(ItemError(rel, f"transiente (I/O): {exc}"))
+            return
+    # else: derived_from já presente — compactação real que `compact()`
+    # acabou de fazer, ou recuperação de crash pós-escrita (arquivo já é
+    # a verdade; só falta indexar). Em ambos, nada a escrever aqui.
+
+    eid = str(meta["id"])
+    _index_delete(con, eid)
+    _index_insert(con, meta, body, rel, "library", slug)  # 3º: índice
+    con.commit()                                            # 4º: commit
+
+    ok = _journal(home, tick_id, "compact", eid, None, rel, report,
+                 derived_from=str(meta["derived_from"]))    # 5º: journal
+    if ok:
+        report.compacted += 1
 
 
 # ── índice incremental (subset de reindex._insert, sem grains/links) ─
@@ -764,14 +937,20 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
     grain_quality = str(meta.get("grain_quality", "mechanical")) or "mechanical"
     shingles_json = _dumps(shingle_hashes(body))
     source_key = meta.get("source_key")
+    source_path = meta.get("source_path")
+    derived_from = meta.get("derived_from")
     description = str(meta.get("description", ""))
     fts_body = f"{description}\n\n{body}" if description else body
+    # `derived_hash` = hash do corpo servido (o que está sendo indexado
+    # agora), distinto de `content_hash` (hash da fonte, nunca tocado pela
+    # compactação — design v1.4 §2/D-1).
+    derived_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
         " grain_quality, shingles, source_key, regime, class,"
-        " agent, session, origin)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " agent, session, origin, source_path, derived_hash, derived_from)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
          title, description,
@@ -780,7 +959,9 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
          str(meta.get("updated", meta.get("created", ""))),
          grain_quality, shingles_json,
          str(source_key) if source_key else None,
-         regime_of(meta), class_of(meta), *provenance(meta)))
+         regime_of(meta), class_of(meta), *provenance(meta),
+         str(source_path) if source_path else None, derived_hash,
+         str(derived_from) if derived_from else None))
     rowid = cur.lastrowid
     assert rowid is not None
     fts_insert(con, rowid, regime_of(meta), title=title, aliases=aliases_text,

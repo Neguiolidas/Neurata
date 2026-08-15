@@ -23,8 +23,10 @@ _REMEDY = (
 # check_schema (público) checa — v8: colunas de procedência
 # (`agent`/`session`/`origin`) sobre a v7 (coluna `regime` + `curated_fts`);
 # v10: eixo de memória (`class`), origem do link (`source_path`), invalidação
-# da derivação (`derived_hash`) e `edges` rechaveada por `id`.
-INDEX_SCHEMA_VERSION = 10
+# da derivação (`derived_hash`) e `edges` rechaveada por `id`; v11: identidade
+# de derivação do espelho compactado (`derived_from`) — os writers passam a
+# preencher `derived_hash`/`source_path`, mortas desde a v10.
+INDEX_SCHEMA_VERSION = 11
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -70,7 +72,8 @@ CREATE TABLE IF NOT EXISTS entries(
   origin TEXT,
   class TEXT,
   source_path TEXT,
-  derived_hash TEXT
+  derived_hash TEXT,
+  derived_from TEXT
 );
 """
 
@@ -103,6 +106,12 @@ _ENTRIES_INDEXES = (
     ("source_path",
      "CREATE INDEX IF NOT EXISTS idx_entries_source_path"
      " ON entries(source_path)"),
+    # Predicado de pendência do tick (D-4 do design v1.4) e do `doctor`:
+    # "espelho ainda não compactado" é `regime='mirror' AND derived_from
+    # IS NULL", uma consulta por tick inteiro.
+    ("derived_from",
+     "CREATE INDEX IF NOT EXISTS idx_entries_derived_from"
+     " ON entries(derived_from)"),
 )
 
 _FTS = ("CREATE VIRTUAL TABLE IF NOT EXISTS entries_fts USING fts5("
@@ -664,7 +673,58 @@ def _v9_to_v10(con: sqlite3.Connection, home: NeurataHome) -> None:
         raise
 
 
-_MIGRATIONS = {7: _v7_to_v8, 8: _v8_to_v9, 9: _v9_to_v10}
+_V11_COLS = ("derived_from",)
+
+
+def _v10_to_v11(con: sqlite3.Connection, home: NeurataHome) -> None:
+    """v10 → v11: abre `derived_from` (identidade de derivação do espelho
+    compactado, design v1.4 §5.3) e faz o backfill de `derived_hash`, que
+    existe desde a v10 mas nunca foi escrita por nenhum writer.
+
+    `derived_hash` vira `content_hash` para toda linha ainda `NULL`. Isso
+    só é correto **porque nenhum grão está compactado ainda**: o archive
+    está vazio (0 blobs), logo `corpo servido == corpo da fonte` universal-
+    mente, e as duas colunas coincidem por identidade. A checagem abaixo
+    roda **antes** do backfill e é a prova dessa premissa: se algum
+    `derived_from` já viesse preenchido, um grão já teria sido compactado
+    (corpo servido == summary, não a fonte) e o `UPDATE` sobrescreveria o
+    `derived_hash` correto pelo `content_hash` errado — corrompendo
+    silenciosamente o campo que `_reconcile_journal_orphans` da v1.4 passa
+    a conferir. Aborta em vez de arriscar.
+
+    `source_path` já é coluna desde a v10 e também nunca foi escrita, mas
+    não tem backfill em SQL puro — só existe no frontmatter, e migração não
+    lê 15k arquivos do disco (mesma regra do `_v9_to_v10`). Fica `NULL` até
+    o próximo `reindex` full; os writers (`reindex._insert`,
+    `tick._index_insert`) passam a gravá-la dali em diante.
+    """
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        existing = entries_columns(con)
+        for col in _V11_COLS:
+            if col not in existing:
+                con.execute(f"ALTER TABLE entries ADD COLUMN {col} TEXT")
+        compacted = con.execute(
+            "SELECT COUNT(*) FROM entries"
+            " WHERE derived_from IS NOT NULL").fetchone()[0]
+        if compacted:
+            raise IndexSchemaError(
+                f"migração v10→v11: {compacted} grão(s) já com "
+                "`derived_from` preenchido — premissa do backfill de "
+                "`derived_hash` (archive vazio, nenhum grão compactado) "
+                "não vale mais; rode `neurata reindex` em vez de migrar")
+        con.execute("UPDATE entries SET derived_hash = content_hash"
+                    " WHERE derived_hash IS NULL")
+        apply_entries_indexes(con)
+        con.execute("INSERT OR REPLACE INTO meta VALUES"
+                    " ('index_schema_version', '11')")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
+_MIGRATIONS = {7: _v7_to_v8, 8: _v8_to_v9, 9: _v9_to_v10, 10: _v10_to_v11}
 
 
 def load_shingle_sets(con: sqlite3.Connection) -> "dict[str, frozenset]":
