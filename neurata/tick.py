@@ -783,7 +783,7 @@ def _compact_mirrors(home: NeurataHome, con, tick_id: str,
     pendentes, até um teto por volta. Pendente = `regime='mirror' AND
     derived_from IS NULL` (D-4) — a retomada é a própria consulta, sem
     cursor: interromper a meio e rodar de novo converge sozinho (a
-    idempotência sai do ponto fixo de `make_summary`, ver
+    idempotência sai do guarda de encolhimento de `compact()`, ver
     `_finish_mirror`).
 
     `grain_quality != 'refined'` não está na letra da spec (D-4 diz só
@@ -817,13 +817,19 @@ def _compact_mirrors(home: NeurataHome, con, tick_id: str,
     con.execute("DELETE FROM _compact_hot")
     con.executemany("INSERT OR IGNORE INTO _compact_hot VALUES (?)",
                     [(i,) for i in hot])
+    # `path` vem junto de propósito: sem ele, cada `compact()` re-acha o
+    # arquivo varrendo library+inbox inteiros (O(acervo) por grão, ~0,2 s
+    # nos ~15 mil arquivos do acervo real — minutos por volta de 500).
+    # Com ele, é um open. A linha do índice é dica, não verdade: `compact`
+    # confere e cai no resolve completo se o disco discordar.
     rows = con.execute(
-        "SELECT id, slug FROM entries WHERE regime='mirror' AND"
+        "SELECT id, slug, path FROM entries WHERE regime='mirror' AND"
         " derived_from IS NULL AND grain_quality != 'refined'"
         " AND id NOT IN (SELECT id FROM _compact_hot)"
         " LIMIT ?", (_COMPACT_LIMIT,)).fetchall()
-    for eid, slug in rows:
-        _compact_one_mirror(home, con, tick_id, str(eid), slug, report)
+    for eid, slug, rel in rows:
+        _compact_one_mirror(home, con, tick_id, str(eid), slug,
+                            home.root / str(rel), report)
 
 
 def _hot_ids(home: NeurataHome) -> "set[str]":
@@ -841,9 +847,9 @@ def _hot_ids(home: NeurataHome) -> "set[str]":
 
 
 def _compact_one_mirror(home: NeurataHome, con, tick_id: str, eid: str,
-                        slug: str, report: TickReport) -> None:
+                        slug: str, path: Path, report: TickReport) -> None:
     try:
-        result = compact(home, eid, reindex_after=False)
+        result = compact(home, eid, reindex_after=False, path=path)
     # `compact()` atravessa entryref/archive/frontmatter, fora deste
     # módulo, com falhas que não dá pra enumerar aqui (frontmatter
     # corrompido, arquivo sumido por corrida entre o SELECT e esta
@@ -868,15 +874,16 @@ def _finish_mirror(home: NeurataHome, con, tick_id: str, rel: str,
     — sempre relê o frontmatter atual do arquivo e decide pelo que
     encontra lá, porque só isso distingue os dois formatos de "noop":
 
-    - **noop genuíno** (D-4): summary == corpo, `compact()` não achou
-      ganho e não tocou o arquivo — `derived_from` ainda ausente. É
+    - **noop genuíno** (D-4): o summary não encolhe o corpo (ponto fixo
+      ou pior), `compact()` não achou ganho e não tocou o arquivo —
+      `derived_from` ainda ausente. É
       aqui que a marca é persistida mesmo sem ganho, senão o grão nunca
       sai do predicado de pendência (medido: 4,0% da amostra real,
       ~590 grãos no acervo — mais que o teto de 500; spec D-4).
     - **crash já reparado** (§4, linha "escrita do arquivo"): uma volta
       anterior já escreveu corpo+`derived_from` corretos e morreu antes
       de indexar; `compact()`, chamado de novo agora, vê o arquivo já
-      compactado, `make_summary` bate ponto fixo contra si mesmo e
+      compactado, o resumo dele não encolhe mais nada e `compact()`
       devolve `noop` outra vez — mas o `derived_from` já em disco é o
       CORRETO (aponta pro full original). Reescrever aqui destruiria
       essa referência e trocaria por `sha256(summary)`, órfão do full

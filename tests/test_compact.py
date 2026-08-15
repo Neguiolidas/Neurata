@@ -100,8 +100,9 @@ def test_compact_reindex_after_default_true_reindexa(tmp_path, monkeypatch):
 
 
 def test_compact_duas_vezes_e_ponto_fixo_nao_duplica_blob(tmp_path):
-    """Idempotência: make_summary(summary) == summary, então a segunda
-    chamada é noop — nada novo vai pro archive, nada corrompe."""
+    """Idempotência: o resumo do corpo já compactado não encolhe mais
+    nada, então a segunda chamada é noop — nada novo vai pro archive,
+    nada corrompe."""
     home, path = _grao(tmp_path, "i1", {"grain_quality": "mechanical"})
 
     primeiro = compact(home, "i1")
@@ -114,3 +115,107 @@ def test_compact_duas_vezes_e_ponto_fixo_nao_duplica_blob(tmp_path):
     assert segundo["action"] == "noop"
     assert path.read_text(encoding="utf-8") == conteudo_apos_primeiro
     assert sorted(home.archive.rglob("*")) == blobs_apos_primeiro
+
+
+def test_compact_nao_infla_corpo_de_headings(tmp_path):
+    """O guarda é "encolheu?", não "é ponto fixo?".
+
+    Corpo só de headings: `make_summary` junta blocos com "\\n\\n" onde o
+    original tinha "\\n", devolvendo um texto MAIOR. Antes, isso não era
+    ponto fixo, passava no teste de igualdade e era gravado como
+    "compactação" — o corpo servido crescia.
+    """
+    corpo = "# Alpha\n# Beta\n# Gama\n"
+    home = NeurataHome(tmp_path)
+    home.init()
+    meta = {"id": "h1", "title": "h1", "grain_quality": "mechanical",
+            "created": "2026-08-10T00:00:00+00:00",
+            "updated": "2026-08-10T00:00:00+00:00"}
+    path = home.library / "h1.md"
+    path.write_text(serialize(meta, corpo), encoding="utf-8")
+    antes = path.read_text(encoding="utf-8")
+
+    from neurata.grains import make_summary
+    assert len(make_summary(corpo)) > len(corpo)  # a armadilha existe
+    blobs_antes = sorted(home.archive.rglob("*"))
+
+    out = compact(home, "h1")
+
+    assert out["action"] == "noop"
+    assert path.read_text(encoding="utf-8") == antes
+    assert sorted(home.archive.rglob("*")) == blobs_antes
+
+
+def test_compact_com_indice_travado_reporta_pendencia_nao_falha(
+        tmp_path, monkeypatch):
+    """Lock do índice preso: a compactação em disco JÁ aconteceu.
+
+    Reportar erro faria o operador repetir um trabalho feito; o retorno
+    diz que só o índice ficou para trás.
+    """
+    from neurata.indexdb import LockHeldError
+
+    home, path = _grao(tmp_path, "l1", {"grain_quality": "mechanical"})
+
+    def travado(_home):
+        raise LockHeldError("índice ocupado")
+
+    monkeypatch.setattr("neurata.compact.reindex", travado)
+
+    out = compact(home, "l1", reindex_after=True)
+
+    assert out["action"] == "compacted-pending-index"
+    assert out["archived"]
+    assert "reindex" in out["reason"]
+    _, corpo = parse(path.read_text(encoding="utf-8"))
+    assert len(corpo) < len(CORPO)  # o arquivo foi compactado de fato
+
+
+def test_compact_com_path_conhecido_nao_varre_o_acervo(tmp_path, monkeypatch):
+    """O atalho é o ponto da mudança: com `path`, `resolve` (O(acervo),
+    ~0,2 s nos 15 mil arquivos reais) não deve nem ser chamado."""
+    home, path = _grao(tmp_path, "p1", {"grain_quality": "mechanical"})
+
+    def proibido(*a, **kw):
+        raise AssertionError("resolve varreu o acervo apesar do path")
+
+    monkeypatch.setattr("neurata.compact.resolve", proibido)
+
+    out = compact(home, "p1", reindex_after=False, path=path)
+
+    assert out["action"] == "compacted"
+
+
+def test_compact_com_path_mentiroso_cai_no_resolve(tmp_path):
+    """A linha do índice é dica, não verdade. Path que não existe mais
+    (arquivo movido/renomeado depois do SELECT) não pode virar erro: o
+    disco decide."""
+    home, real = _grao(tmp_path, "p2", {"grain_quality": "mechanical"})
+    fantasma = home.library / "sumiu-entre-o-select-e-agora.md"
+
+    out = compact(home, "p2", reindex_after=False, path=fantasma)
+
+    assert out["action"] == "compacted"
+    assert out["path"] == str(real.relative_to(home.root))
+
+
+def test_compact_ignora_path_fora_do_home(tmp_path):
+    """Índice velho (ou adulterado) apontando pra fora de library/inbox
+    não pode virar entrada pelo atalho e escapar do domínio que
+    `resolve` varre: o arquivo de fora fica intacto e quem compacta é o
+    grão de dentro."""
+    home, dentro = _grao(tmp_path, "p3", {"grain_quality": "mechanical"})
+    fora = tmp_path.parent / "fora-do-home.md"
+    fora.write_text(
+        serialize({"id": "p3", "title": "p3",
+                   "created": "2026-08-10T00:00:00+00:00",
+                   "updated": "2026-08-10T00:00:00+00:00"}, CORPO),
+        encoding="utf-8")
+    intacto = fora.read_text(encoding="utf-8")
+    try:
+        out = compact(home, "p3", reindex_after=False, path=fora)
+
+        assert out["path"] == str(dentro.relative_to(home.root))
+        assert fora.read_text(encoding="utf-8") == intacto
+    finally:
+        fora.unlink()

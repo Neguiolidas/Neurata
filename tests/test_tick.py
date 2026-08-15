@@ -1604,7 +1604,7 @@ def test_second_tick_does_not_recompact_already_compacted_mirror(tmp_path):
 
 def test_noop_mirror_drains_pending_predicate_and_stays_drained(tmp_path):
     """O fato medido nesta versão: 4,0% dos espelhos reais não têm ganho
-    (`summary == corpo`) — `compact()` devolve `action=noop` e NÃO
+    (o summary não encolhe o corpo) — `compact()` devolve `action=noop` e NÃO
     escreve `derived_from` sozinho. Sem o passo do tick persistir a
     marca mesmo aqui, esses grãos nunca sairiam do predicado de
     pendência e encheriam o teto de 500 pra sempre (D-4). Este teste
@@ -1785,10 +1785,11 @@ def test_compact_failure_on_one_mirror_does_not_crash_tick_or_others(
 
     real_compact = __import__("neurata.compact", fromlist=["compact"]).compact
 
-    def flaky_compact(home_arg, ref, reindex_after=True):
+    def flaky_compact(home_arg, ref, reindex_after=True, path=None):
         if ref == bad_id:
             raise RuntimeError("falha simulada de compactação")
-        return real_compact(home_arg, ref, reindex_after=reindex_after)
+        return real_compact(home_arg, ref, reindex_after=reindex_after,
+                            path=path)
 
     monkeypatch.setattr("neurata.tick.compact", flaky_compact)
 
