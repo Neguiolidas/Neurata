@@ -177,7 +177,7 @@ def commit(home, subject, body="") -> "str | None":
 
 def _gc_auto(home) -> None:
     """Poda a trilha, não só o acervo: cada commit deixa um objeto solto
-    por arquivo tocado, e uma volta de compactação toca centenas. Sem isso
+    por arquivo tocado, e uma compactação em lote toca centenas. Sem isso
     o .git cresce mais do que a compactação economiza (medido: +1,69 MiB
     de objetos soltos contra −1,65 MiB de corpo, em 1004 grãos; `gc`
     empacota os mesmos objetos em metade do tamanho).

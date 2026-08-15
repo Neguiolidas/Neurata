@@ -6,6 +6,55 @@ v0.4–v0.7 shipped under the 0.8.0 release. None of the 0.x versions was
 ever tagged or uploaded anywhere — they are development history, kept
 for the record. For anyone installing the package, 1.0.0 is the history.
 
+## [1.4.0] - 2026-08-15
+
+Compacting a grain used to mean losing track of what it originally said.
+1.4 splits the two bodies an archive actually has — the one it *serves*
+and the one it was *given* — so shrinking a grain is a change of
+representation, never a change of content.
+
+### Added
+- **`derived_hash` vs `content_hash`**: the index now hashes the served
+  body separately from the deposited one. A compacted grain has two
+  different hashes by construction, and every check that used to compare
+  them (tick reconciliation, doctor) knows which of the two it means.
+  The full body always comes back byte-for-byte from the archive.
+- `doctor` gains a **`derived-integrity`** check: it fails when a grain
+  says it was derived from an archived body that is no longer there.
+  That is the one loss in this area that no reindex can undo — the
+  served body is a summary and the original is gone — so it reports as
+  `fail`, not as a warning to be scrolled past.
+
+### Changed
+- Index schema v10 → v12, migrated in place. v11 opens `derived_hash`
+  and `derived_from`; v12 **packs `shingles`** from a JSON array of hex
+  strings into a blob of 8-byte keys. Measured on this archive: 82.8 MiB
+  → 33.1 MiB, **−60%** over 14,979 grains and 4.34 M shingles, with the
+  same near-duplicate results — it is the same set, stored as bytes
+  instead of as text about bytes.
+- `compact` is **monotonic in size**: it only writes when the summary
+  actually shrinks the body. A body of consecutive headings used to come
+  back *larger* than it went in (blocks rejoined with a blank line), so
+  "compacting" grew the served corpus; that case is now a no-op with a
+  reason.
+- `compact` no longer stamps `updated`. Changing how a grain is stored
+  is not the grain saying something new, and `shelf` scores recency:
+  stamping it would have zeroed the age of the whole archive at once and
+  floated freshly compacted grains over intact, curated material.
+- `compact` writes in crash-safe order (archive → file → index) and, if
+  the index is locked by another process, returns
+  `compacted-pending-index` instead of reporting failure for work that is
+  already on disk. The index catches up on the next `tick` or `reindex`.
+- `compact` refuses mirrors (`regime='mirror'`) and `refined` grains.
+  Both are work that evaporates without warning: the next `tick` rewrites
+  a mirror's body from its source, dropping the derivation and orphaning
+  the archived blob, and the mechanical Miner does not demote what the
+  DeepMiner refined.
+- `tick` runs `git gc --auto` after its commit. Each commit leaves loose
+  objects behind, and a batch of compactions touches hundreds — measured
+  at +1.69 MiB of loose objects against −1.65 MiB of body over 1,004
+  grains, i.e. the audit trail growing faster than the archive shrank.
+
 ## [1.3.0] - 2026-08-13
 
 An archive that only knows *where* a grain came from cannot tell a dated

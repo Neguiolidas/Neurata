@@ -61,6 +61,11 @@ neurata query "term agent:hermes"     # provenance: who deposited it
                                       #  curated only)
 neurata query "term missing:agent"    # the gaps: curated grains with no agent
 neurata expand <id>          # card → summary → full
+neurata expand <id> --restore # bring the full body back from the archive
+
+# shrink a grain's served body; the full is archived, never dropped
+neurata compact <id>         # no-op unless it actually shrinks; refuses
+                             # mirrors (the next tick would undo it)
 
 # what the archive itself flags
 neurata shelf --conflicts    # near-duplicates and id/slug collisions
@@ -110,7 +115,7 @@ leaves the body unchanged, so the tick sees nothing to absorb — run
 - Nothing is ever destroyed: archive + quarantine, never delete.
 - Zero runtime dependencies. Python ≥ 3.10.
 
-**Status:** v1.3.0. The 1.0 gate was dogfooding, not a version number:
+**Status:** v1.4.0. The 1.0 gate was dogfooding, not a version number:
 `neurata doctor` measures it, and it cleared at 12 distinct days of real
 use inside a 14-day window.
 
