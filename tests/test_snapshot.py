@@ -112,6 +112,54 @@ def test_commit_returns_sha_prefix(tmp_path):
     assert all(c in "0123456789abcdef" for c in sha)
 
 
+def test_commit_poda_a_trilha_com_gc_auto(tmp_path, monkeypatch):
+    """Um commit por tick deixa objetos soltos; sem gc o .git cresce mais
+    do que a compactação economiza. `--auto` porque o limiar é do git."""
+    home = _home(tmp_path)
+    ensure_repo(home)
+    (home.library / "nota.md").write_text("conteudo\n")
+
+    chamadas = []
+    original = snapshot._run
+
+    def espiao(h, *args, **kwargs):
+        chamadas.append(args)
+        return original(h, *args, **kwargs)
+
+    monkeypatch.setattr(snapshot, "_run", espiao)
+    assert commit(home, "feat: nota") is not None
+
+    assert ("gc", "--auto", "--quiet") in chamadas
+    # depois do commit: podar antes de gravar seria poda do que não existe
+    assert chamadas.index(("gc", "--auto", "--quiet")) > next(
+        i for i, c in enumerate(chamadas) if c[0] == "commit")
+
+
+def test_commit_sobrevive_a_falha_do_gc(tmp_path, monkeypatch):
+    """Commit gravado é fato consumado: gc que falha não pode derrubar o
+    retorno nem propagar erro (é `_run` sem check — best-effort de fato)."""
+    home = _home(tmp_path)
+    ensure_repo(home)
+    (home.library / "nota.md").write_text("conteudo\n")
+
+    original = subprocess.run
+
+    def gc_quebrado(cmd, *args, **kwargs):
+        if "gc" in cmd:
+            raise OSError("git sumiu no meio do gc")
+        return original(cmd, *args, **kwargs)
+
+    monkeypatch.setattr(snapshot.subprocess, "run", gc_quebrado)
+    sha = commit(home, "feat: nota")
+
+    assert sha is not None
+    monkeypatch.undo()
+    log = subprocess.run(
+        ["git", "-C", str(home.library), "log", "--oneline"],
+        capture_output=True, text=True, check=True).stdout
+    assert "feat: nota" in log
+
+
 def test_commit_does_not_inherit_global_identity(tmp_path, tmp_path_factory, monkeypatch):
     global_cfg = tmp_path_factory.mktemp("hostcfg") / "gitconfig"
     global_cfg.write_text("[user]\n\tname = Host User\n\temail = host@example.com\n")

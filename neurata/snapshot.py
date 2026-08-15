@@ -171,7 +171,22 @@ def commit(home, subject, body="") -> "str | None":
         args += ["-m", body]
     _run(home, *args, check=True)
     proc = _run(home, "rev-parse", "--short=12", "HEAD", check=True)
+    _gc_auto(home)
     return proc.stdout.strip()
+
+
+def _gc_auto(home) -> None:
+    """Poda a trilha, não só o acervo: cada commit deixa um objeto solto
+    por arquivo tocado, e uma volta de compactação toca centenas. Sem isso
+    o .git cresce mais do que a compactação economiza (medido: +1,69 MiB
+    de objetos soltos contra −1,65 MiB de corpo, em 1004 grãos; `gc`
+    empacota os mesmos objetos em metade do tamanho).
+
+    `--auto` é no-op barato abaixo do limiar do próprio git (gc.auto), e
+    roda destacado acima dele — nunca segura o tick. Best-effort: falha de
+    gc não invalida um commit que já está feito.
+    """
+    _run(home, "gc", "--auto", "--quiet")
 
 
 def commit_tick(home, report) -> "str | None":
