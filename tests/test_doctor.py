@@ -303,6 +303,32 @@ def test_derived_integrity_ok_with_null_source_path(tmp_path):
     assert checks["derived-integrity"].status == "ok"
 
 
+def test_derived_integrity_quiet_on_pre_v11_schema(tmp_path):
+    """Acervo ainda não migrado (schema v10, sem a coluna `derived_from`):
+    o check sai calado em vez de gritar "índice ilegível".
+
+    Regressão do smoke de upgrade real 1.3.0 → 1.4.0: o primeiro comando que
+    o usuário roda depois de atualizar é `doctor`, e ele acusava corrupção
+    (com o conselho caro de reindexar) sobre um índice perfeitamente íntegro,
+    só velho. Quem é dono do assunto é o check `index-schema`, e ele continua
+    avisando — um fato, um aviso."""
+    home = _home(tmp_path)
+    (home.library / "n.md").write_text("---\nid: 01Z\ntitle: T\n---\ncorpo\n")
+    reindex(home)
+    con = sqlite3.connect(home.index_path)
+    con.execute("DROP INDEX IF EXISTS idx_entries_derived_from")
+    con.execute("ALTER TABLE entries DROP COLUMN derived_from")
+    con.execute("UPDATE meta SET value='10' WHERE key='index_schema_version'")
+    con.commit()
+    con.close()
+    checks = _by_name(run_checks(home))
+    assert checks["derived-integrity"].status == "ok"
+    assert "ilegível" not in checks["derived-integrity"].detail
+    assert not checks["derived-integrity"].remedy
+    # o aviso legítimo continua de pé, uma vez só
+    assert checks["index-schema"].status == "warn"
+
+
 def test_derived_integrity_fails_when_blob_missing(tmp_path):
     """Espelho compactado com blob ausente no archive: fail."""
     home = _home(tmp_path)

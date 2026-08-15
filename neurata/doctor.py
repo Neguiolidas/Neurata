@@ -305,6 +305,17 @@ def _derived_integrity(home: NeurataHome) -> Check:
     if not home.index_path.exists():
         return Check("derived-integrity", "ok",
                      "index.db ausente (ver check index)")
+    # `derived_from` nasce no schema v11. Num acervo ainda não migrado a
+    # coluna não existe e a consulta abaixo levantaria OperationalError —
+    # que o `except` traduziria em "índice ilegível", alarme falso: o índice
+    # está íntegro, só velho. Quem é dono desse assunto é o check
+    # `index-schema`, que já reporta a defasagem e manda migrar. Sair cedo
+    # evita o segundo aviso, com diagnóstico errado, sobre o mesmo fato.
+    schema = _meta(home, "index_schema_version")
+    if schema is not None and schema.isdigit() and int(schema) < 11:
+        return Check("derived-integrity", "ok",
+                     f"schema v{schema} anterior à compactação "
+                     "(ver check index-schema)")
     con = sqlite3.connect(home.index_path)
     try:
         # Contar quantos espelhos compactados existem
