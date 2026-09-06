@@ -84,12 +84,12 @@ def _project_from_git(cwd: Path) -> "str | None":
     root = git_root(cwd)
     if root is None:
         return None
-    # Mesma normalização de `project_of` (indexdb): o envelope do
-    # depósito resolve o root com Path().resolve(), que no Windows
-    # devolve backslashes — e PurePosixPath os trata como caractere
-    # comum, devolvendo o caminho inteiro como "projeto". `as_posix()`
-    # aqui equivale àquele unificar-separador.
-    return PurePosixPath(root.as_posix()).name or None
+    # Mesma normalização de `project_of` (indexdb): separadores são
+    # unificados ANTES do PurePosixPath — o mock/teste e um git em
+    # Windows podem devolver backslashes, e `as_posix()` de um Path
+    # Linux não os separa (a barra invertida é caractere comum lá).
+    # A normalização tem que ser agnóstica de plataforma.
+    return PurePosixPath(str(root).replace(chr(92), "/")).name or None
 
 
 
