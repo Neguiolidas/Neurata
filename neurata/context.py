@@ -52,25 +52,45 @@ def _env(d: "dict | None", name: str) -> "str | None":
     return raw.strip() or None
 
 
-def _project_from_git(cwd: Path) -> "str | None":
+def git_root(cwd: "Path | str | None" = None) -> "Path | None":
+    """Raiz git do diretório — best-effort, nunca levanta.
+
+    A âncora compartilhada de "onde estou": a busca (v1.6) deriva o
+    projeto dela; o harvest de instruções do projeto (v1.7) colhe a
+    partir dela. Uma implementação do conceito, não duas."""
+    if cwd is not None:
+        workdir = Path(cwd)
+    else:
+        try:
+            workdir = Path.cwd()
+        except OSError:
+            return None
     try:
         proc = subprocess.run(
-            ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
+            ["git", "-C", str(workdir), "rev-parse", "--show-toplevel"],
             capture_output=True, text=True, timeout=GIT_TIMEOUT_S,
             check=False)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0:
         return None
-    root = proc.stdout.strip().splitlines()[0] if proc.stdout.strip() \
-        else ""
+    root = proc.stdout.strip().splitlines()[0] if proc.stdout.strip()         else ""
     if not root:
+        return None
+    return Path(root)
+
+
+def _project_from_git(cwd: Path) -> "str | None":
+    root = git_root(cwd)
+    if root is None:
         return None
     # Mesma normalização de `project_of` (indexdb): o envelope do
     # depósito resolve o root com Path().resolve(), que no Windows
     # devolve backslashes — e PurePosixPath os trata como caractere
-    # comum, devolvendo o caminho inteiro como "projeto".
-    return PurePosixPath(root.replace("\\", "/")).name or None
+    # comum, devolvendo o caminho inteiro como "projeto". `as_posix()`
+    # aqui equivale àquele unificar-separador.
+    return PurePosixPath(root.as_posix()).name or None
+
 
 
 def capture_query_context(cwd: "Path | str | None" = None,

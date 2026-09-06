@@ -20,6 +20,7 @@ devolve None só quando o conteúdo não é daquele formato. Levantar exceção
 FORMAT_CLASS = {
     "skill-md": "procedural",
     "rules": "procedural",
+    "mdc": "procedural",
     "yaml": "semantic",
     "markdown": "semantic",
 }

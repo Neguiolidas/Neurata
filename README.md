@@ -83,8 +83,16 @@ neurata query "term status:superseded"  # and search stops being blind:
 
 # mirror an external source into the inbox (then `tick` catalogues it)
 neurata harvest                        # default provider: claude-code skills
+neurata harvest project                # THIS repo's instruction files:
+                                       # AGENTS.md, CLAUDE.md, copilot-
+                                       # instructions.md, .cursorrules and
+                                       # .cursor/rules/*.mdc — found at the
+                                       # git root of the cwd (override with
+                                       # NEURATA_PROJECT_ROOT), each grain
+                                       # classed by its shape
 neurata harvest ~/some/dir             # or any directory, format auto-detected
-neurata harvest ~/rules --format rules # or pinned: skill-md, markdown, yaml, rules
+neurata harvest ~/rules --format rules # or pinned: skill-md, markdown, mdc,
+                                       # yaml, rules
 
 # archive health
 neurata doctor

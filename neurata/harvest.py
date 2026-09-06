@@ -96,7 +96,11 @@ def _source_key_fn(namespace: str, source_dir: "Path | None"):
     da árvore e sobrevive a renomear título.
     """
     if source_dir is None:
-        return lambda item: f"{namespace}:{item.name}"
+        # Provider pode declarar a chave do item (o `project` usa o
+        # caminho relativo — renomear título não troca identidade);
+        # sem `key`, mantém o padrão histórico por nome.
+        return lambda item: (f"{namespace}:"
+                             f"{getattr(item, 'key', None) or item.name}")
 
     def key(item) -> str:
         rel = os.path.relpath(item.source_path, source_dir)
@@ -115,6 +119,7 @@ def harvest(home: NeurataHome, target: str,
     adapter `fmt` e `target` é só o rótulo/namespace dos source_keys.
     """
     validate_target(target)
+    ns_fn = None
     if source_dir is not None:
         provider = resolve(GENERIC)
         source_dir = Path(source_dir).expanduser()
@@ -138,9 +143,30 @@ def harvest(home: NeurataHome, target: str,
     else:
         provider = resolve(target)
         if skills_dir is None:
-            skills_dir = _default_skills_dir()
+            # Provider nomeado pode ter local default próprio (o
+            # `project` colhe a raiz git do cwd; claude-code mantém o
+            # dir global de skills).
+            skills_dir = getattr(provider, "default_dir",
+                                 _default_skills_dir)()
+        # Guard do self-ingest para provider ROOT-SCOPED (que "possui"
+        # a árvore inteira da raiz, como o genérico): raiz dentro do
+        # NEURATA_HOME duplicaria o acervo a cada rodada. O claude-code
+        # escaneia um padrão estreito (SKILL.md) e fica fora.
+        ns_fn = getattr(provider, "namespace", None)
+        if ns_fn is not None and skills_dir is not None:
+            real_root = Path(skills_dir).resolve()
+            real_home = home.root.resolve()
+            if real_root == real_home or real_root.is_relative_to(real_home):
+                raise ValueError(
+                    f"origem dentro do NEURATA_HOME ({real_home}): colher a "
+                    f"própria Library duplicaria o acervo a cada rodada")
         scan_args = ((skills_dir,), {})
     namespace = _namespace(target, source_dir)
+    if source_dir is None and ns_fn is not None:
+        # Provider root-scoped: o que ele "possui" é a raiz resolvida
+        # (mesmo desenho do genérico) — colher o mesmo repo
+        # re-sincroniza; repos distintos não colidem.
+        namespace = ns_fn(Path(skills_dir) if skills_dir else None)
     source_key_of = _source_key_fn(namespace, source_dir)
 
     con = connect(home)

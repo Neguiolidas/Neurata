@@ -8,11 +8,13 @@ docs/superpowers/specs/2026-07-18-neurata-v0.5-harvest.md.
 default, mantido por compat com quem importa `neurata.providers.scan`.
 Providers novos entram pelo `resolve()`.
 """
-from neurata.providers import claude_code
+from types import ModuleType
+
+from neurata.providers import claude_code, project
 from neurata.providers.claude_code import Skill, Skipped, scan
 
 #: Providers nomeados: `harvest <nome>` sem diretório de origem.
-REGISTRY = {"claude-code": claude_code}
+REGISTRY = {"claude-code": claude_code, "project": project}
 
 #: Provider usado quando o harvest recebe um diretório qualquer.
 GENERIC = "generic"
@@ -20,7 +22,7 @@ GENERIC = "generic"
 __all__ = ["GENERIC", "REGISTRY", "Skill", "Skipped", "resolve", "scan"]
 
 
-def resolve(target: str):
+def resolve(target: str) -> "ModuleType":
     """Devolve o módulo provider de `target`, ou levanta `KeyError`.
 
     `generic` é importado sob demanda: ele arrasta os adapters de formato

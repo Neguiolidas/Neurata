@@ -6,6 +6,48 @@ v0.4–v0.7 shipped under the 0.8.0 release. None of the 0.x versions was
 ever tagged or uploaded anywhere — they are development history, kept
 for the record. For anyone installing the package, 1.0.0 is the history.
 
+## [1.7.0] - 2026-09-06
+
+The densest signal already on disk — the project's own instruction
+files — was invisible to the harvest: `.cursor/rules/*.mdc` matched no
+format at all, and AGENTS.md or copilot-instructions.md only showed up
+if someone pointed a generic walk at the whole repo, arriving as prose
+with no known home. 1.7 gives them a known home and one command.
+
+### Added
+- **`neurata harvest project`**: a named provider (same pattern as
+  `claude-code`) that collects the canonical instruction set of the
+  repo you are standing in — `AGENTS.md`, `CLAUDE.md`,
+  `.github/copilot-instructions.md`, the legacy
+  `.cursorrules`/`.windsurfrules`/`.clinerules`, and
+  `.cursor/rules/*.mdc`. The anchor is the git root of the cwd, the
+  same "where am I" the search has used since 1.6
+  (`NEURATA_PROJECT_ROOT` overrides). Not in a repo → an empty report,
+  never an error.
+- **Identity by relative path, namespace by repo**: source keys are
+  `project@<root-hash>:<relpath>` — the same scheme the generic
+  provider uses. Harvesting the same repo re-syncs; AGENTS.md from two
+  different repos never collides; removing a file emits a tombstone.
+- **`mdc` format adapter**: Cursor's modern rule files get their own
+  adapter (frontmatter `description`/`globs`/`alwaysApply` through the
+  same subset parser the tick uses; rule body preserved; globs surface
+  in the description where they are searchable). The generic walker
+  now recognizes `.mdc` everywhere, and `--format mdc` pins it.
+- **Memory class by shape, unchanged doctrine**: rule files with
+  structure (.mdc, legacy dotfiles) are `procedural`; the markdown
+  trio is prose and stays `semantic` — the adapter that read the file
+  declares the class, as since v1.3.
+
+### Fixed
+- **The markdown adapter no longer leaks frontmatter into the body.**
+  Any `.md` with frontmatter (an AGENTS.md with metadata, a doc with
+  YAML header) had its `---` block indexed as literal text, polluting
+  body, description and search. With valid frontmatter, title,
+  description and body now come from the parsed metadata and the text
+  after it; broken frontmatter keeps the historical whole-text
+  behavior. (Found by the v1.7 integration tests; the fix covers every
+  generic walk, not just the new provider.)
+
 ## [1.6.0] - 2026-09-06
 
 Since 1.2 the deposit knows where it is — the cwd, the git root, the

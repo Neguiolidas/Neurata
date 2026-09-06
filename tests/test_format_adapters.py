@@ -242,3 +242,33 @@ def test_resolve_format_skill_md_beats_markdown():
     """Convenção mais específica ganha: SKILL.md não é markdown genérico."""
     assert resolve_format(Path("/a/b/SKILL.md")) == "skill-md"
     assert resolve_format(Path("/a/b/skill.md")) == "markdown"
+
+
+# ── v1.7: markdown com frontmatter não vaza YAML no corpo ───────────
+
+def test_markdown_com_frontmatter_nao_vaza_yaml():
+    from neurata.providers.formats.markdown import parse as mparse
+    s = mparse(Path("docs/AGENTS.md"),
+               "---\ntitle: Instrucoes do repo\ndescription: Como agir\n"
+               "---\n# Instrucoes do repo\n\nConteudo.\n")
+    assert s is not None
+    assert s.name == "Instrucoes do repo"
+    assert s.description == "Como agir"
+    assert not s.body.startswith("---")
+    assert "Conteudo." in s.body
+
+
+def test_markdown_sem_title_usa_h1():
+    from neurata.providers.formats.markdown import parse as mparse
+    s = mparse(Path("docs/x.md"),
+               "---\ndescription: d\n---\n# Titulo H1\n\nCorpo.\n")
+    assert s.name == "Titulo H1"
+    assert s.description == "d"
+
+
+def test_markdown_frontmatter_torto_e_prosa():
+    from neurata.providers.formats.markdown import parse as mparse
+    text = "---\nlinha quebrada\n---\n# Titulo\nCorpo.\n"
+    s = mparse(Path("docs/y.md"), text)
+    assert s.name == "Titulo"
+    assert s.body == text  # comportamento histórico preservado

@@ -40,6 +40,7 @@ EXCLUDE_DIRS = (".git", "__pycache__", "node_modules", ".venv",
 _ADAPTER_MODULES = {
     "skill-md": "skill_md",
     "markdown": "markdown",
+    "mdc": "mdc",
     "yaml": "yaml",
     "rules": "rules",
 }
@@ -58,6 +59,7 @@ _RULES_SUFFIXES = (".cursorrules", ".windsurfrules", ".clinerules")
 _FORMAT_SUFFIXES = {
     "skill-md": (".md", ".markdown"),
     "markdown": (".md", ".markdown"),
+    "mdc": (".mdc",),
     "yaml": (".yaml", ".yml"),
     "rules": _RULES_SUFFIXES,
 }
@@ -119,6 +121,8 @@ def resolve_format(path: Path) -> "str | None":
     name = path.name
     if name == "SKILL.md":
         return "skill-md"
+    if name.endswith(".mdc"):
+        return "mdc"
     if name.endswith(_RULES_SUFFIXES):
         return "rules"
     if name.endswith((".md", ".markdown")):
