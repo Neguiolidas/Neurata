@@ -56,7 +56,7 @@ neurata query "term regime:curated"   # facet: what the archive owns
 neurata query "term class:procedural" # memory axis: how-to, as opposed to
                                       # class:episodic (a dated event) and
                                       # class:semantic (a fact)
-neurata query "term agent:hermes"     # provenance: who deposited it
+neurata query "term agent:agente-exemplo"     # provenance: who deposited it
                                       # (agent:/session:/origin:/project:,
                                       #  curated only)
 neurata query "term missing:agent"    # the gaps: curated grains with no agent

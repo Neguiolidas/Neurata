@@ -367,3 +367,56 @@ def test_absorb_que_rederiva_mesmo_par_nao_reloga(tmp_path):
               if r["verb"] == "contradiction"])
     assert n1 == n0
     assert len(_pairs(home)) == 1
+
+
+# ── revisão hostil: índice em schema antigo nos caminhos de v1.5 ────
+
+def _recua_carimbo(home, versao):
+    con = connect(home)
+    con.execute("UPDATE meta SET value=? WHERE key='index_schema_version'",
+                (str(versao),))
+    con.commit()
+    con.close()
+
+
+def test_report_migra_indice_v12_em_linha(tmp_path):
+    """contradictions/resolve não podem exigir reindex manual: query, tick
+    e harvest migram em linha; bater em `no such table` cru é diagnóstico
+    errado (índice desatualizado não é índice corrompido)."""
+    home = _home(tmp_path)
+    _dep(home, "Use sqlite para o cache local.\n")
+    _dep(home, "Nunca use sqlite para o cache local.\n")
+    _recua_carimbo(home, 12)
+
+    rep = contradictions_report(home)
+    assert rep["open_count"] == 1
+    con = connect(home)
+    try:
+        (v,) = con.execute("SELECT value FROM meta WHERE"
+                           " key='index_schema_version'").fetchone()
+    finally:
+        con.close()
+    assert v == "13"  # migração em linha aconteceu
+
+
+def test_resolve_all_migra_indice_v12_em_linha(tmp_path):
+    home = _home(tmp_path)
+    a = _dep(home, "Use sqlite para o cache local.\n")
+    b = _dep(home, "Nunca use sqlite para o cache local.\n")
+    _recua_carimbo(home, 12)
+
+    r = resolve_all(home)
+    assert r["resolved_count"] == 1
+    marcados = _superseded_map(home)
+    assert len(marcados) == 1
+    perdedor, vencedor = next(iter(marcados.items()))
+    assert {perdedor, vencedor} == {a, b}
+
+
+def test_doctor_em_schema_v12_nao_acusa_falso(tmp_path):
+    home = _home(tmp_path)
+    _dep(home, "Use sqlite para o cache local.\n")
+    _recua_carimbo(home, 12)
+    checks = {c.name: c for c in run_checks(home)}
+    assert checks["contradictions"].status == "ok"
+    assert "anterior" in checks["contradictions"].detail

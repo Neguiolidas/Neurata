@@ -22,7 +22,8 @@ from datetime import datetime, timezone
 from neurata.entryref import resolve
 from neurata.frontmatter import serialize
 from neurata.home import NeurataHome, atomic_write_text, relposix
-from neurata.indexdb import LockHeldError, connect, open_contradictions
+from neurata.indexdb import (LockHeldError, check_schema, connect,
+                             migrate_if_needed, open_contradictions)
 from neurata.reindex import reindex
 from neurata.ulid import new_ulid
 
@@ -66,6 +67,12 @@ def contradictions_report(home: NeurataHome) -> dict:
     """Pares em aberto com títulos, e quantos já estão resolvidos."""
     con = connect(home)
     try:
+        # Mesma cortesia de query/harvest: índice em schema antigo migra
+        # em linha — reportar contradição não pode exigir reindex manual
+        # (e bater em `no such table: contradictions` cru é diagnóstico
+        # errado: o índice não está corrompido, está desatualizado).
+        migrate_if_needed(con, home)
+        check_schema(con, require_reindexed=False)
         abertos = open_contradictions(con)
         titles = _titles(con, {p["a_id"] for p in abertos}
                          | {p["b_id"] for p in abertos})
@@ -93,6 +100,8 @@ def resolve_all(home: NeurataHome) -> dict:
     fechou. Journal por par; um `reindex` no fim sincroniza o cache."""
     con = connect(home)
     try:
+        migrate_if_needed(con, home)
+        check_schema(con, require_reindexed=False)
         pendentes = open_contradictions(con)
         resolvidos: list[dict] = []
         for p in pendentes:

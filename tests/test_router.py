@@ -84,10 +84,10 @@ def test_facet_regime_e_extraida():
 # ---- v1.1: facetas de procedência + missing: ----------------------------
 
 def test_provenance_facets_extracted():
-    p = parse("rrf agent:hermes session:s-1 origin:manual")
+    p = parse("rrf agent:agente-teste session:s-1 origin:manual")
     assert p.tokens == ["rrf"]
     assert p.facets == {
-        "agent": "hermes", "session": "s-1", "origin": "manual"}
+        "agent": "agente-teste", "session": "s-1", "origin": "manual"}
 
 
 def test_missing_is_conjunction():
@@ -103,8 +103,8 @@ def test_missing_unknown_key_is_parsed_not_judged():
 
 
 def test_quoted_provenance_facet_is_literal():
-    p = parse('"agent:hermes" resto')
-    assert p.phrases == ["agent:hermes"]
+    p = parse('"agent:agente-teste" resto')
+    assert p.phrases == ["agent:agente-teste"]
     assert p.facets == {}
     assert p.tokens == ["resto"]
 

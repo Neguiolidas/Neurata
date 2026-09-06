@@ -187,16 +187,16 @@ def test_create_schema_has_provenance_columns(tmp_path):
 
 
 def test_provenance_extracts_the_three_fields():
-    meta = {"source": {"agent": "hermes", "session": "s1",
+    meta = {"source": {"agent": "agente-teste", "session": "s1",
                        "origin": "cli", "git_branch": "main"}}
-    assert provenance(meta) == ("hermes", "s1", "cli")
+    assert provenance(meta) == ("agente-teste", "s1", "cli")
 
 
 def test_provenance_without_source_is_all_none():
     assert provenance({"id": "01A"}) == (None, None, None)
 
 
-@pytest.mark.parametrize("bad", ["hermes", ["hermes"], 7, None])
+@pytest.mark.parametrize("bad", ["agente-teste", ["agente-teste"], 7, None])
 def test_provenance_source_not_a_dict_is_all_none(bad):
     """Frontmatter é entrada não confiável: `source:` escalar não explode."""
     assert provenance({"source": bad}) == (None, None, None)

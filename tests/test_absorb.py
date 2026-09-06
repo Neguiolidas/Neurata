@@ -97,10 +97,10 @@ def test_absorb_preserves_source_block(tmp_path):
     home = _home(tmp_path)
     rel, _eid = _catalogado(
         home, "a.md", "corpo velho",
-        extra="source:\n  agent: hermes\n  session: s-1\n  origin: manual\n")
+        extra="source:\n  agent: agente-teste\n  session: s-1\n  origin: manual\n")
     antes, _ = parse((home.root / rel).read_text(encoding="utf-8"))
     _reescreve(home, rel, corpo="corpo novo",
-               meta_extra="source:\n  agent: hermes\n  session: s-1\n"
+               meta_extra="source:\n  agent: agente-teste\n  session: s-1\n"
                           "  origin: manual\n")
 
     curate_tick(home)

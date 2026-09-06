@@ -92,7 +92,7 @@ def test_migration_preserves_rows_and_fts(tmp_path):
     """Migração é ALTER + UPDATE: nenhuma linha nasce ou morre, e a FTS
     (que não é tocada) segue com a mesma contagem."""
     home, con = _v7(tmp_path)
-    _curated(home, con, "c1", "hermes", "s-1", "manual")
+    _curated(home, con, "c1", "agente-teste", "s-1", "manual")
     _mirror(home, con, "m1")
     con.execute("INSERT INTO entries_fts(rowid, title, body)"
                 " SELECT rowid, title, '' FROM entries")
@@ -116,14 +116,14 @@ def test_migration_backfills_curated_and_never_mirror(tmp_path):
     NULL por construção (`provenance` já recusa `source_key`) — se algum
     dia vazar, é procedência inventada e o teste cai."""
     home, con = _v7(tmp_path)
-    _curated(home, con, "c1", "hermes", "s-1", "manual")
+    _curated(home, con, "c1", "agente-teste", "s-1", "manual")
     _mirror(home, con, "m1")
     con.close()
 
     con = connect(home)
     try:
         migrate_if_needed(con, home)
-        assert _prov(con, "c1") == ("hermes", "s-1", "manual")
+        assert _prov(con, "c1") == ("agente-teste", "s-1", "manual")
         assert _prov(con, "m1") == (None, None, None)
     finally:
         con.close()
@@ -131,7 +131,7 @@ def test_migration_backfills_curated_and_never_mirror(tmp_path):
 
 def test_migration_stamps_current_version(tmp_path):
     home, con = _v7(tmp_path)
-    _curated(home, con, "c1", "hermes", "s-1", "manual")
+    _curated(home, con, "c1", "agente-teste", "s-1", "manual")
     con.close()
 
     con = connect(home)
@@ -148,7 +148,7 @@ def test_second_migration_is_a_noop(tmp_path):
     """Rodar de novo não pode reescrever nada: a 2ª chamada devolve None
     (nada migrado) e a procedência editada à mão sobrevive."""
     home, con = _v7(tmp_path)
-    _curated(home, con, "c1", "hermes", "s-1", "manual")
+    _curated(home, con, "c1", "agente-teste", "s-1", "manual")
     con.close()
 
     con = connect(home)
@@ -180,7 +180,7 @@ def test_crash_midway_rolls_back_ddl_and_stamp(tmp_path, monkeypatch):
     penduradas e sem carimbo é o estado que faria o próximo `INSERT` do
     tick pensar que tem schema novo — a transação existe pra isso."""
     home, con = _v7(tmp_path)
-    _curated(home, con, "c1", "hermes", "s-1", "manual")
+    _curated(home, con, "c1", "agente-teste", "s-1", "manual")
     _curated(home, con, "c2", "atena", "s-2", "manual")
     con.close()
 
@@ -211,7 +211,7 @@ def test_migration_resumes_over_dangling_columns(tmp_path):
     transação. O guard é a coluna, não o carimbo: `ALTER` é pulado e a
     migração completa em vez de morrer em `duplicate column name`."""
     home, con = _v7(tmp_path)
-    _curated(home, con, "c1", "hermes", "s-1", "manual")
+    _curated(home, con, "c1", "agente-teste", "s-1", "manual")
     for col in _PROVENANCE:
         con.execute(f"ALTER TABLE entries ADD COLUMN {col} TEXT")
     con.commit()
@@ -220,7 +220,7 @@ def test_migration_resumes_over_dangling_columns(tmp_path):
     con = connect(home)
     try:
         assert migrate_if_needed(con, home) == INDEX_SCHEMA_VERSION
-        assert _prov(con, "c1") == ("hermes", "s-1", "manual")
+        assert _prov(con, "c1") == ("agente-teste", "s-1", "manual")
     finally:
         con.close()
 
@@ -230,7 +230,7 @@ def test_unreadable_grain_becomes_null_and_migration_completes(tmp_path):
     migração abortada: o índice inteiro não pode ficar refém de um `.md`
     que o usuário apagou na mão."""
     home, con = _v7(tmp_path)
-    _curated(home, con, "sumido", "hermes", "s-1", "manual")
+    _curated(home, con, "sumido", "agente-teste", "s-1", "manual")
     _curated(home, con, "quebrado", "atena", "s-2", "manual")
     _curated(home, con, "bom", "iris", "s-3", "manual")
     (home.library / "sumido.md").unlink()
@@ -270,7 +270,7 @@ def test_migration_refuses_to_run_under_foreign_lock(tmp_path):
     """A entrada pública pega o lock: se outro processo estiver escrevendo,
     é `LockHeldError` e não uma migração concorrente."""
     home, con = _v7(tmp_path)
-    _curated(home, con, "c1", "hermes", "s-1", "manual")
+    _curated(home, con, "c1", "agente-teste", "s-1", "manual")
     con.close()
 
     con = connect(home)
@@ -312,7 +312,7 @@ def test_tick_migrates_stamped_v7_instead_of_refusing(tmp_path):
 def test_harvest_migrates_stamped_v7_instead_of_refusing(tmp_path):
     """Mesma porta pelo lado do `harvest`, que não detém o lock."""
     home, con = _v7(tmp_path)
-    _curated(home, con, "c1", "hermes", "s-1", "manual")
+    _curated(home, con, "c1", "agente-teste", "s-1", "manual")
     con.close()
     source = tmp_path.parent / "fonte-v7"
     source.mkdir()
@@ -327,7 +327,7 @@ def test_harvest_migrates_stamped_v7_instead_of_refusing(tmp_path):
         assert schema_state(con) == "current"
         # o `harvest` não reconcilia a biblioteca: aqui o backfill do grão
         # v7 tem de estar de pé depois de atravessar a porta.
-        assert _prov(con, "c1") == ("hermes", "s-1", "manual")
+        assert _prov(con, "c1") == ("agente-teste", "s-1", "manual")
     finally:
         con.close()
 
@@ -369,7 +369,7 @@ def test_migration_chains_v7_to_current(tmp_path):
     """Um v7 chega ao schema corrente numa chamada só: o loop segue o
     dicionário de passos, não um número escrito na mão."""
     home, con = _v7(tmp_path)
-    _curated(home, con, "c1", "hermes", "s-1", "manual")
+    _curated(home, con, "c1", "agente-teste", "s-1", "manual")
     con.close()
     con = connect(home)
     try:

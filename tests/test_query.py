@@ -148,11 +148,11 @@ def _setup_prov(tmp_path):
     """
     home = _home(tmp_path)
     _write(home, "grao-a",
-           ["id: 02A", "title: Grão A", "source:", "  agent: hermes",
+           ["id: 02A", "title: Grão A", "source:", "  agent: agente-teste",
             "  session: s-1", "  origin: manual"],
            "Deploy do serviço com RRF.\n")
     _write(home, "grao-b",
-           ["id: 02B", "title: Grão B", "source:", "  agent: hermes",
+           ["id: 02B", "title: Grão B", "source:", "  agent: agente-teste",
             "  session: s-2", "  origin: auto"],
            "Deploy do serviço com BM25.\n")
     _write(home, "grao-sem-agente",
@@ -162,7 +162,7 @@ def _setup_prov(tmp_path):
     # se houver, é do autor original, não uma procedência de depósito.
     _write(home, "espelho",
            ["id: 02D", "title: Espelho", "source_key: claude-code:x",
-            "source:", "  agent: hermes"],
+            "source:", "  agent: agente-teste"],
            "Deploy do serviço espelhado.\n")
     reindex(home)
     return home
@@ -173,17 +173,17 @@ def _slugs(res):
 
 
 def test_agent_facet_filters_curated_only(tmp_path):
-    res = query(_setup_prov(tmp_path), "agent:hermes")
+    res = query(_setup_prov(tmp_path), "agent:agente-teste")
     assert _slugs(res) == {"grao-a", "grao-b"}
 
 
 def test_provenance_facet_never_surfaces_mirror(tmp_path):
     home = _setup_prov(tmp_path)
-    assert _slugs(query(home, "deploy agent:hermes")) == {"grao-a", "grao-b"}
+    assert _slugs(query(home, "deploy agent:agente-teste")) == {"grao-a", "grao-b"}
 
 
 def test_agent_with_mirror_regime_is_empty_not_error(tmp_path):
-    res = query(_setup_prov(tmp_path), "agent:hermes regime:mirror")
+    res = query(_setup_prov(tmp_path), "agent:agente-teste regime:mirror")
     assert res["results"] == []
 
 
@@ -202,7 +202,7 @@ def test_missing_agent_lists_curated_gaps(tmp_path):
 def test_missing_partitions_the_curated_set(tmp_path):
     """|missing:agent| + |agent:*| == |curados|, sem sobra nem sobreposição."""
     home = _setup_prov(tmp_path)
-    com = _slugs(query(home, "agent:hermes"))
+    com = _slugs(query(home, "agent:agente-teste"))
     sem = _slugs(query(home, "missing:agent"))
     assert com.isdisjoint(sem)
     assert com | sem == {"grao-a", "grao-b", "grao-sem-agente"}

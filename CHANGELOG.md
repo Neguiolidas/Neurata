@@ -313,7 +313,7 @@ from where — and which grains still answer none of that.
 
 ### Added
 - Provenance facets `agent:`, `session:` and `origin:` —
-  `neurata query "term agent:hermes"`. Provenance is read from each
+  `neurata query "term agent:agente-exemplo"`. Provenance is read from each
   grain's frontmatter and stored in three real columns, so the facet
   filters instead of guessing.
 - `missing:<facet>` — the inverse question: which curated grains still
@@ -324,7 +324,7 @@ from where — and which grains still answer none of that.
 
 ### Changed
 - **Behaviour change:** `agent:`, `session:` and `origin:` used to fall
-  through to free text, so `agent:hermes` matched any grain that merely
+  through to free text, so `agent:agente-exemplo` matched any grain that merely
   mentioned either word. They now filter. Saved queries that relied on
   the old fan-out return fewer (and different) results.
 - Provenance facets only ever match curated grains. A mirror carries the
@@ -357,8 +357,8 @@ re-derived from the files — but the round trip costs a full reindex
 (43 s for ~15 k grains here) against 23 ms for the migration.
 
 ### Known limitations
-- Facet values are matched literally, case included: `agent:hermes` and
-  `agent:Hermes` are different values (36 results against 0 in the
+- Facet values are matched literally, case included: `agent:agente-exemplo` and
+  `agent:Agente-Exemplo` are different values (36 results against 0 in the
   archive this was measured on).
 - A facet value cannot contain spaces, and quoting does not help:
   `agent:"claude code"` drops the facet and searches for the text

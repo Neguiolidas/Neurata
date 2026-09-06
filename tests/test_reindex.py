@@ -262,14 +262,14 @@ def test_reindex_writes_provenance_columns(tmp_path):
     """v1.1 F2: `source:` do frontmatter vira coluna consultável."""
     home = _home(tmp_path)
     (home.library / "curada.md").write_text(
-        "---\nid: 01P\ntitle: Curada\nsource:\n  agent: hermes\n"
+        "---\nid: 01P\ntitle: Curada\nsource:\n  agent: agente-teste\n"
         "  session: s-42\n  origin: cli\n---\nCorpo.\n")
     reindex(home)
     con = connect(home)
     row = con.execute(
         "SELECT agent, session, origin"
         " FROM entries WHERE id='01P'").fetchone()
-    assert tuple(row) == ("hermes", "s-42", "cli")
+    assert tuple(row) == ("agente-teste", "s-42", "cli")
 
 
 def test_reindex_without_source_writes_nulls(tmp_path):
@@ -291,7 +291,7 @@ def test_reindex_deposited_entry_carries_provenance(tmp_path):
     reindex tem que ler dali sem nenhum acordo extra."""
     home = _home(tmp_path)
     res = deposit(home, "Conteúdo qualquer.", title="Depositada",
-                  agent="hermes", session="s-99")
+                  agent="agente-teste", session="s-99")
     reindex(home)
     con = connect(home)
     row = con.execute(
@@ -300,7 +300,7 @@ def test_reindex_deposited_entry_carries_provenance(tmp_path):
     # `origin` é DERIVADO pelo deposit (não é parâmetro): "manual" p/
     # conteúdo inline, o path p/ `--file`. Quem consultar `origin:` está
     # perguntando "por onde entrou", não "quem mandou".
-    assert tuple(row) == ("hermes", "s-99", "manual")
+    assert tuple(row) == ("agente-teste", "s-99", "manual")
 
 
 def test_reindex_fills_derived_hash_for_every_row(tmp_path):

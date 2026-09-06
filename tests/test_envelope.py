@@ -119,19 +119,19 @@ def test_capture_reads_agent_and_session_from_host_env(sem_procedencia):
 
 
 def test_capture_neurata_vars_beat_host_vars(sem_procedencia):
-    sem_procedencia.setenv("NEURATA_AGENT", "hermes")
+    sem_procedencia.setenv("NEURATA_AGENT", "agente-teste")
     sem_procedencia.setenv("AI_AGENT", "claude-code_2-1-229_agent")
     sem_procedencia.setenv("NEURATA_SESSION", "s-neurata")
     sem_procedencia.setenv("CLAUDE_CODE_SESSION_ID", "s-host")
     env = capture()
-    assert (env["agent"], env["session"]) == ("hermes", "s-neurata")
+    assert (env["agent"], env["session"]) == ("agente-teste", "s-neurata")
 
 
 def test_capture_explicit_argument_beats_env(sem_procedencia):
     sem_procedencia.setenv("NEURATA_AGENT", "do-env")
     sem_procedencia.setenv("NEURATA_SESSION", "sessao-env")
-    env = capture(agent="hermes", session="s-1")
-    assert (env["agent"], env["session"]) == ("hermes", "s-1")
+    env = capture(agent="agente-teste", session="s-1")
+    assert (env["agent"], env["session"]) == ("agente-teste", "s-1")
 
 
 def test_capture_omits_provenance_when_env_absent(sem_procedencia):
@@ -157,7 +157,7 @@ def test_capture_does_not_normalize_neurata_agent(sem_procedencia):
     ("claude-code_2-1-229_agent", "claude-code"),
     ("claude-code_2-2-0_agent", "claude-code"),
     ("claude-code", "claude-code"),
-    ("hermes_agent", "hermes"),
+    ("agente_teste_agent", "agente-teste"),
     ("mcp_server_v1.4.2_agent", "mcp_server"),
     ("  claude-code_2-1-229_agent  ", "claude-code"),
     ("agent", "agent"),      # sobraria vazio → devolve o cru

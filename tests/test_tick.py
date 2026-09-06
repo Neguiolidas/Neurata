@@ -1137,7 +1137,7 @@ def test_tick_writes_provenance_for_curated_item(tmp_path):
     """Item comum passando pelo tick carrega o envelope pro índice."""
     home = _home(tmp_path)
     (home.inbox / "dep.md").write_text(
-        "---\nid: 01TP\ntitle: Depositada\nsource:\n  agent: hermes\n"
+        "---\nid: 01TP\ntitle: Depositada\nsource:\n  agent: agente-teste\n"
         "  session: s-7\n  origin: manual\n---\nCorpo do grão.\n",
         encoding="utf-8")
     curate_tick(home)
@@ -1145,21 +1145,21 @@ def test_tick_writes_provenance_for_curated_item(tmp_path):
     row = con.execute(
         "SELECT agent, session, origin FROM entries WHERE id='01TP'"
     ).fetchone()
-    assert tuple(row) == ("hermes", "s-7", "manual")
+    assert tuple(row) == ("agente-teste", "s-7", "manual")
 
 
 def test_tick_mirror_never_gets_provenance(tmp_path):
     """Invariante do regime: espelho é NULL nas três colunas MESMO com
     `source:` no arquivo — o `source:` de um arquivo espelhado é do autor
-    externo, e atribuí-lo faria `agent:hermes` devolver material que
-    hermes nunca depositou."""
+    externo, e atribuí-lo faria `agent:agente-teste` devolver material que
+    agente-teste nunca depositou."""
     home = _home(tmp_path)
     body = "Corpo espelhado."
     content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
     (home.inbox / "sk.md").write_text(
         "---\nid: 01TM\ntype: skill\nenv: claude-code\ntitle: Skill X\n"
         "description: d\nsource_key: claude-code:x\nsource_path: /tmp/x\n"
-        "source:\n  agent: hermes\n  session: s-7\n  origin: manual\n"
+        "source:\n  agent: agente-teste\n  session: s-7\n  origin: manual\n"
         f"created: 2026-01-01T00:00:00+00:00\ncontent_hash: {content_hash}\n"
         f"---\n{body}", encoding="utf-8")
     curate_tick(home)
@@ -1175,7 +1175,7 @@ def test_reindex_agrees_with_tick_on_provenance(tmp_path):
     mesmas três colunas que o caminho incremental do tick gravou."""
     home = _home(tmp_path)
     (home.inbox / "dep.md").write_text(
-        "---\nid: 01TA\ntitle: A\nsource:\n  agent: hermes\n"
+        "---\nid: 01TA\ntitle: A\nsource:\n  agent: agente-teste\n"
         "  session: s-7\n  origin: manual\n---\nCorpo A.\n",
         encoding="utf-8")
     curate_tick(home)
