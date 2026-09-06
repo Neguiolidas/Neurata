@@ -93,3 +93,11 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # O PyPI não deixa republicar a mesma versão (imutável por
+          # design): re-run de uma tag já publicada morria no upload com
+          # um vermelho que não dizia nada novo — test/guard/build/smoke
+          # já provaram o artefato. `skip-existing` torna o publish
+          # idempotente: arquivo existente é pulado com aviso, run fica
+          # verde. Versão NOVA continua subindo normalmente.
+          skip-existing: true
