@@ -10,6 +10,7 @@ from pathlib import Path
 
 from neurata.frontmatter import FrontmatterError
 from neurata.frontmatter import parse as parse_frontmatter
+from neurata.providers.claude_code import as_str_list
 from neurata.providers.generic import Scanned, oneline
 
 #: H1 ATX na primeira linha não-vazia. `^#{1}\s` evita casar `## sub` e
@@ -49,6 +50,8 @@ def parse(path: Path, text: str) -> "Scanned | None":
             body=body,
             source_path=str(path),
             fmt="markdown",
+            tags=as_str_list(meta.get("tags")),
+            aliases=as_str_list(meta.get("aliases")),
         )
 
     match = _H1.search(text)

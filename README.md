@@ -60,6 +60,11 @@ neurata query "term agent:agente-exemplo"     # provenance: who deposited it
                                       # (agent:/session:/origin:/project:,
                                       #  curated only)
 neurata query "term missing:agent"    # the gaps: curated grains with no agent
+neurata query "term tag:osint"        # tags the SOURCE declared (v1.8 carries
+                                      # them from yaml/skill/markdown into
+                                      # the index — mirrors included)
+neurata query "term --include-stale"  # tombstoned grains are excluded by
+                                      # default; this flag brings them back
 neurata expand <id>          # card → summary → full
 neurata expand <id> --restore # bring the full body back from the archive
 

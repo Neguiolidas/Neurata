@@ -227,13 +227,14 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
     # e reaproveitado, não duas implementações do mesmo hash.
     derived_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
     superseded_by = meta.get("superseded_by")
+    stale = meta.get("stale")
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
         " grain_quality, shingles, source_key, regime, class,"
         " agent, session, origin, source_path, derived_hash, derived_from,"
-        " superseded_by)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " superseded_by, stale)"
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
          title, description,
@@ -243,7 +244,8 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
          grain_quality, shingles_blob, meta.get("source_key"),
          regime_of(meta), class_of(meta), *provenance(meta),
          meta.get("source_path"), derived_hash, meta.get("derived_from"),
-         str(superseded_by) if superseded_by else None))
+         str(superseded_by) if superseded_by else None,
+         str(stale).lower() if stale else None))
     rowid = cur.lastrowid
     assert rowid is not None  # INSERT sempre popula lastrowid
     fts_insert(con, rowid, regime_of(meta), title=title, aliases=aliases_text,

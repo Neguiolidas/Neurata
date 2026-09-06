@@ -40,7 +40,8 @@ class QueryError(ValueError):
 
 
 def query(home: NeurataHome, qstr: str, limit: int = 10,
-          context: "QueryContext | None" = None) -> dict:
+          context: "QueryContext | None" = None,
+          include_stale: bool = False) -> dict:
     cfg = config.load(home)
     parsed = router.parse(qstr)
     # antes do check de vazia: `missing:xpto` sozinho tem has_facets e
@@ -63,10 +64,11 @@ def query(home: NeurataHome, qstr: str, limit: int = 10,
         pre_sql, pre_params = _prefilter(parsed)
         if not parsed.has_text:
             assert pre_sql is not None  # has_facets garante clauses não-vazias
-            results = _facet_listing(con, pre_sql, pre_params, limit)
+            results = _facet_listing(con, pre_sql, pre_params, limit,
+                                     include_stale)
         else:
             results = _search(con, cfg, parsed, pre_sql, pre_params,
-                              limit, home, ctx)
+                              limit, home, ctx, include_stale)
     finally:
         con.close()
     for rank, card in enumerate(results, start=1):
@@ -279,11 +281,12 @@ def _prefilter(parsed: router.ParsedQuery) -> "tuple[str | None, list]":
 
 
 def _facet_listing(con: sqlite3.Connection, pre_sql: str, pre_params: list,
-                   limit: int) -> list[dict]:
+                   limit: int, include_stale: bool = False) -> list[dict]:
+    filtro_stale = "" if include_stale         else " AND COALESCE(stale,'') <> 'true'"
     rows = con.execute(
         "SELECT rowid, id, slug, title, description, type, path,"
         " superseded_by"  # nosec B608
-        f" FROM entries WHERE rowid IN ({pre_sql})"
+        f" FROM entries WHERE rowid IN ({pre_sql}){filtro_stale}"
         " ORDER BY updated DESC, rowid LIMIT ?",
         [*pre_params, limit]).fetchall()
     cards = [_card(r, score=None, snippet=None, via="facet") for r in rows]
@@ -351,7 +354,8 @@ def _fanout(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
 def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
             pre_sql: "str | None", pre_params: list,
             limit: int, home: NeurataHome,
-            context: "QueryContext | None") -> list[dict]:
+            context: "QueryContext | None",
+            include_stale: bool = False) -> list[dict]:
     snippets: dict[int, str] = {}
     ranked = _fanout(con, cfg, parsed, "entries_fts", pre_sql, pre_params,
                      _TOPN, snippets)
@@ -372,6 +376,19 @@ def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
                     final[r] = (final.get(r, 0.0)
                                 + cfg["w_ppr"] * pr.get(r, 0.0) / mx)
                     via.setdefault(r, "graph")
+    # Exclusão de stale (v1.8): antes do corte — um grão morto que
+    # entra no top-K é resultado que o usuário não pediu. Com
+    # include_stale, nenhuma exclusão acontece (a flag existe para isso).
+    stale_rowids: set = set()
+    if not include_stale:
+        stale_rowids = {r[0] for r in con.execute(
+            "SELECT rowid FROM entries WHERE stale='true'")}
+        if stale_rowids:
+            for r in stale_rowids:
+                final.pop(r, None)
+                via.pop(r, None)
+                snippets.pop(r, None)
+            seeds = [s for s in seeds if s not in stale_rowids]
     boost = cfg["skill_boost"] if parsed.skill_hint else None
     rows = {r[0]: r for r in _fetch_entries(con, list(final))}
     for rowid, row in rows.items():
@@ -396,7 +413,8 @@ def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
     extra: list[dict] = []
     if need > 0:
         extra = _curated_lane(con, cfg, parsed, pre_sql, pre_params, need,
-                              {c["id"] for c in top}, rowid_of)
+                              {c["id"] for c in top}, rowid_of,
+                              stale_rowids)
         top = top[:limit - len(extra)]
     _apply_shelf(con, home, cfg["shelf"], top + extra, rowid_of)
     _annotate(con, top + extra)
@@ -471,7 +489,8 @@ def _quota(parsed: router.ParsedQuery, cfg: dict, limit: int) -> int:
 def _curated_lane(con: sqlite3.Connection, cfg: dict,
                   parsed: router.ParsedQuery, pre_sql: "str | None",
                   pre_params: list, need: int, ja_no_top: set,
-                  rowid_of: dict) -> list[dict]:
+                  rowid_of: dict, stale_rowids: "set | None" = None
+                  ) -> list[dict]:
     """Os `need` melhores grãos curados que o pool principal não trouxe.
 
     Busca de novo em `curated_fts` em vez de re-ordenar o pool porque o pool
@@ -483,6 +502,8 @@ def _curated_lane(con: sqlite3.Connection, cfg: dict,
     ranked = _fanout(con, cfg, parsed, "curated_fts", pre_sql, pre_params,
                      _LANE_TOPN, snippets)
     scores = rrf.fuse(ranked, cfg["rrf_k"])
+    if stale_rowids:
+        scores = {r: v for r, v in scores.items() if r not in stale_rowids}
     ordem = sorted(scores, key=lambda r: (-scores[r], r))
     linhas = {row[0]: row for row in _fetch_entries(con, ordem)}
     extra: list[dict] = []

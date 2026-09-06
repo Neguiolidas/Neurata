@@ -13,6 +13,7 @@ import re
 from functools import cache
 from pathlib import Path
 
+from neurata.providers.claude_code import as_str_list
 from neurata.providers.generic import Scanned, oneline
 
 try:  # pragma: no cover - depende do ambiente
@@ -35,6 +36,8 @@ def _key_re(key: str, indent: str = "") -> "re.Pattern[str]":
 _NAME_RE = _key_re("name")
 _ID_RE = _key_re("id")
 _DESC_RE = _key_re("description")
+_TAGS_RE = _key_re("tags")
+_ALIASES_RE = _key_re("aliases")
 
 #: Bloco `info:` com suas linhas indentadas (OpenAPI, agent cards…).
 _INFO_RE = re.compile(r"^info:[ \t]*\n((?:[ \t]+.*\n?)+)", re.MULTILINE)
@@ -71,25 +74,25 @@ def _first_str(*values: object) -> "str | None":
     return None
 
 
-def _from_yaml(text: str) -> "tuple[str | None, str | None]":
-    """(title, description) via PyYAML, ou (None, None) se não der."""
+def _from_yaml(text: str) -> "tuple[str | None, str | None, list, list]":
+    """(title, description, tags, aliases) via PyYAML, ou vazio se não der."""
     if _yaml is None:  # pragma: no cover - depende do ambiente
-        return None, None
+        return None, None, [], []
     try:
         doc = _yaml.safe_load(text)
     except Exception:  # noqa: BLE001 - YAML torto cai pro regex
-        return None, None
+        return None, None, [], []
     if not isinstance(doc, dict):
-        return None, None
+        return None, None, [], []
     info = doc.get("info")
     info = info if isinstance(info, dict) else {}
     title = _first_str(doc.get("name"), doc.get("id"), info.get("name"))
     desc = _first_str(doc.get("description"), info.get("description"))
-    return title, desc
+    return title, desc, doc.get("tags") or [], doc.get("aliases") or []
 
 
 def parse(path: Path, text: str) -> "Scanned | None":
-    title, desc = _from_yaml(text)
+    title, desc, tags, aliases = _from_yaml(text)
     if title is None:
         title = _first_str(_from_regex(text, _NAME_RE),
                            _from_regex(text, _ID_RE),
@@ -97,10 +100,16 @@ def parse(path: Path, text: str) -> "Scanned | None":
     if desc is None:
         desc = _first_str(_from_regex(text, _DESC_RE),
                           _from_info(text, "description"))
+    if not tags:
+        tags = _from_regex(text, _TAGS_RE)
+    if not aliases:
+        aliases = _from_regex(text, _ALIASES_RE)
     return Scanned(
         name=oneline(title or path.stem, 120) or path.stem,
         description=oneline(desc or text),
         body=text,
         source_path=str(path),
         fmt="yaml",
+        tags=as_str_list(tags),
+        aliases=as_str_list(aliases),
     )

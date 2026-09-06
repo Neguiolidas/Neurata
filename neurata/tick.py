@@ -258,7 +258,7 @@ def _process_skill_item(home: NeurataHome, con, tick_id: str, path: Path,
     rel_src = _relpath(home, path)
     source_key = str(meta.get("source_key"))
     row = con.execute(
-        "SELECT id, slug, path, content_hash FROM entries"
+        "SELECT id, slug, path, content_hash, class FROM entries"
         " WHERE source_key=? AND location='library'", (source_key,)
     ).fetchone()
 
@@ -267,9 +267,22 @@ def _process_skill_item(home: NeurataHome, con, tick_id: str, path: Path,
                             shingle_sets, rel_src)
         return
 
-    entry_id, slug, lib_rel, lib_hash = row
+    entry_id, slug, lib_rel, lib_hash, lib_class = row
     content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
-    if content_hash == lib_hash:
+    # No-op honesto (v1.8): comparar só o hash do corpo consumia como
+    # no-op um item cujos tags/class a re-colheita acabou de acrescentar
+    # — o mesmo buraco que manteve entry_tags=0 no acervo. Comparar o
+    # triplo: corpo, classe declarada e tags (lower-case, como o writer
+    # grava).
+    raw_tags = meta.get("tags") or []
+    if isinstance(raw_tags, str):
+        raw_tags = [t.strip() for t in raw_tags.split(",") if t.strip()]
+    new_tags = tuple(sorted(str(t).lower() for t in raw_tags))
+    con_tags = tuple(sorted(t[0] for t in con.execute(
+        "SELECT t.tag FROM entry_tags t JOIN entries e ON e.rowid ="
+        " t.entry_rowid WHERE e.id=?", (entry_id,))))
+    if (content_hash == lib_hash and class_of(meta) == lib_class
+            and new_tags == con_tags):
         # no-op: já refletido na library — só consome o item pendente.
         try:
             path.unlink()
@@ -330,6 +343,16 @@ def _sync_update_in_place(home: NeurataHome, con, tick_id: str, *,
     for key in ("title", "description", "env", "source_key", "source_path"):
         if key in new_meta:
             merged[key] = new_meta[key]
+    # Tags/aliases/class são SUBSTITUTIVOS (v1.8): a fonte é a verdade do
+    # espelho — se ela parou de declarar, o espelho para de declarar. Os
+    # demais campos continuam merge-only.
+    for key in ("tags", "aliases"):
+        if new_meta.get(key):
+            merged[key] = new_meta[key]
+        else:
+            merged.pop(key, None)
+    if new_meta.get("class"):
+        merged["class"] = new_meta["class"]
     merged.pop("stale", None)
     merged.pop("stale_since", None)
     # `derived_from` do meta antigo apontaria pro corpo compactado ANTERIOR
@@ -416,7 +439,14 @@ def _process_tombstone(home: NeurataHome, con, tick_id: str, path: Path,
         report.errors.append(ItemError(rel_src, f"transiente (I/O): {exc}"))
         return
 
-    ok = _journal(home, tick_id, "stale", str(new_meta.get("id")), rel_src,
+    # O índice acompanha o arquivo NA MESMA passada (v1.8): antes da
+    # coluna `stale` existir, tombstonar era gravar um campo que a busca
+    # nunca consultaria — a linha continuava elegível para sempre.
+    stale_id = str(new_meta.get("id"))
+    con.execute("UPDATE entries SET stale='true' WHERE id=?", (stale_id,))
+    con.commit()
+
+    ok = _journal(home, tick_id, "stale", stale_id, rel_src,
                  lib_rel, report)
     if not ok:
         return
@@ -878,13 +908,14 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
     # compactação — design v1.4 §2/D-1).
     derived_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
     superseded_by = meta.get("superseded_by")
+    stale = meta.get("stale")
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
         " grain_quality, shingles, source_key, regime, class,"
         " agent, session, origin, source_path, derived_hash, derived_from,"
-        " superseded_by)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " superseded_by, stale)"
+        "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
          title, description,
@@ -896,7 +927,8 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
          regime_of(meta), class_of(meta), *provenance(meta),
          str(source_path) if source_path else None, derived_hash,
          str(derived_from) if derived_from else None,
-         str(superseded_by) if superseded_by else None))
+         str(superseded_by) if superseded_by else None,
+         str(stale).lower() if stale else None))
     rowid = cur.lastrowid
     assert rowid is not None
     fts_insert(con, rowid, regime_of(meta), title=title, aliases=aliases_text,

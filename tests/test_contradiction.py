@@ -11,7 +11,7 @@ from neurata import indexdb
 from neurata.deposit import deposit
 from neurata.doctor import run_checks
 from neurata.home import CONTRACT_VERSION, NeurataHome
-from neurata.indexdb import connect
+from neurata.indexdb import INDEX_SCHEMA_VERSION, connect
 from neurata.query import QueryError, query
 from neurata.reindex import reindex
 from neurata.supersede import (
@@ -396,7 +396,7 @@ def test_report_migra_indice_v12_em_linha(tmp_path):
                            " key='index_schema_version'").fetchone()
     finally:
         con.close()
-    assert v == "13"  # migração em linha aconteceu
+    assert v == str(INDEX_SCHEMA_VERSION)  # a cadeia vai até a corrente
 
 
 def test_resolve_all_migra_indice_v12_em_linha(tmp_path):

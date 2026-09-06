@@ -146,7 +146,8 @@ def _dispatch(args: argparse.Namespace, home: NeurataHome) -> tuple[dict, int]:
     if args.command == "reindex":
         return reindex(home), 0
     if args.command == "query":
-        return query(home, args.q, limit=args.limit), 0
+        return query(home, args.q, limit=args.limit,
+                     include_stale=args.include_stale), 0
     if args.command == "doctor":
         checks = run_checks(home)
         return ({"checks": [dataclasses.asdict(c) for c in checks]},
@@ -291,6 +292,9 @@ def _build_parser() -> argparse.ArgumentParser:
         help="texto e/ou facets (type:/tag:/env:/project:/regime:/class:/"
              "agent:/session:/origin:, e missing:<facet>)")
     qry.add_argument("--limit", type=int, default=10)
+    qry.add_argument("--include-stale", action="store_true",
+                     help="inclui grãos tombstonados (stale) no resultado;"
+                          " o padrão exclui")
     qry.add_argument("--json", action="store_true",
                      default=argparse.SUPPRESS)
 

@@ -30,8 +30,11 @@ _REMEDY = (
 # empacotada em blob de 8 B por shingle (era JSON, 2,5× maior); v13:
 # contradição de verdade — `entries.superseded_by` (derivada do
 # frontmatter, mesmo pacto de `derived_from`), `assertions` e
-# `contradictions` (caches re-deriváveis das afirmações normativas).
-INDEX_SCHEMA_VERSION = 13
+# `contradictions` (caches re-deriváveis das afirmações normativas);
+# v14: ciclo de vida visível à busca — `entries.stale` espelha o
+# frontmatter do grão (a v1.5 deixou o tombstone só no arquivo, e a
+# busca que não consulta o marcador não muda um resultado).
+INDEX_SCHEMA_VERSION = 14
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -93,7 +96,8 @@ CREATE TABLE IF NOT EXISTS entries(
   source_path TEXT,
   derived_hash TEXT,
   derived_from TEXT,
-  superseded_by TEXT
+  superseded_by TEXT,
+  stale TEXT
 );
 """
 
@@ -840,9 +844,37 @@ def _v12_to_v13(con: sqlite3.Connection, home: NeurataHome) -> None:
         raise
 
 
+_V14_COLS = ("stale",)
+
+
+def _v13_to_v14(con: sqlite3.Connection, home: NeurataHome) -> None:
+    """v13 → v14: `stale` sai do frontmatter-only e chega à busca (v1.8).
+
+    A v1.5 deixou o tombstone gravando `stale: true` só no ARQUIVO —
+    coluna nenhuma, índice nenhum, consulta nenhuma: tombstonar mudava
+    zero resultados. A coluna é derivada do frontmatter pelos writers
+    (tick/reindex); a migração NÃO lê disco (regra v9/v10/v13) — o
+    reindex completo do acervo (87 s medidos) preenche o que o tick
+    incremental não alcançar.
+    """
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        existing = entries_columns(con)
+        for col in _V14_COLS:
+            if col not in existing:
+                con.execute(f"ALTER TABLE entries ADD COLUMN {col} TEXT")
+        apply_entries_indexes(con)
+        con.execute("INSERT OR REPLACE INTO meta VALUES"
+                    " ('index_schema_version', '14')")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
 _MIGRATIONS = {
     7: _v7_to_v8, 8: _v8_to_v9, 9: _v9_to_v10, 10: _v10_to_v11,
-    11: _v11_to_v12, 12: _v12_to_v13,
+    11: _v11_to_v12, 12: _v12_to_v13, 13: _v13_to_v14,
 }
 
 

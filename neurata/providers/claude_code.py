@@ -6,7 +6,7 @@ tick, p/ hash de `content_hash` bater) e monta `Skill`. Qualquer falha
 por-arquivo vira `Skipped`, nunca aborta o scan inteiro. Não toca
 índice/library; não calcula `content_hash` (responsabilidade do harvest).
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from neurata.frontmatter import FrontmatterError, parse
@@ -25,12 +25,42 @@ class Skill:
     body: str
     source_path: str
     fmt: str = "skill-md"
+    tags: "list[str]" = field(default_factory=list)
+    aliases: "list[str]" = field(default_factory=list)
 
 
 @dataclass(frozen=True)
 class Skipped:
     path: str
     reason: str
+
+
+def as_str_list(value) -> "list[str]":
+    """Coerção única de tags/aliases declarados pela fonte.
+
+    str → split por vírgula (com `[a, b]` despelotado); lista/tupla →
+    str por item; vazio/torto → []. Um único ponto de coerção: dois
+    adapters coerindo diferente é como o mesmo YAML colhido por caminhos
+    diferentes virava dois grãos. Mora aqui (base do pacote de
+    providers) porque generic já importa Skipped daqui — e o caminho
+    reverso seria ciclo."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        s = value.strip()
+        if not s:
+            return []
+        if s.startswith("[") and s.endswith("]"):
+            s = s[1:-1]
+        return [p.strip() for p in s.split(",") if p.strip()]
+    if isinstance(value, (list, tuple)):
+        out: list[str] = []
+        for item in value:
+            s = str(item).strip()
+            if s:
+                out.append(s)
+        return out
+    return []
 
 
 def scan(skills_dir: Path) -> "tuple[list[Skill], list[Skipped]]":
@@ -57,6 +87,9 @@ def scan(skills_dir: Path) -> "tuple[list[Skill], list[Skipped]]":
             continue
         name = str(meta.get("name") or entry.name)
         description = str(meta.get("description", ""))
-        skills.append(Skill(name=name, description=description, body=body,
-                             source_path=str(skill_md)))
+        skills.append(Skill(
+            name=name, description=description, body=body,
+            source_path=str(skill_md),
+            tags=as_str_list(meta.get("tags")),
+            aliases=as_str_list(meta.get("aliases"))))
     return skills, skipped

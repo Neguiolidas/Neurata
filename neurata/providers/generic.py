@@ -24,7 +24,7 @@ Decisões que valem comentário:
   testes reproduzíveis.
 """
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from neurata.providers.claude_code import Skipped
@@ -69,12 +69,16 @@ _FORMAT_SUFFIXES = {
 class Scanned:
     """Item colhido. Campos `name`/`description`/`body`/`source_path`
     são o contrato que `harvest._emit_item` consome — iguais aos de
-    `claude_code.Skill`. `fmt` é só diagnóstico."""
+    `claude_code.Skill`. `fmt` é só diagnóstico. `tags`/`aliases` (v1.8)
+    carregam o que a FONTE declara — o adapter cujo formato não declara
+    devolve listas vazias, nunca palpite."""
     name: str
     description: str
     body: str
     source_path: str
     fmt: str
+    tags: "list[str]" = field(default_factory=list)
+    aliases: "list[str]" = field(default_factory=list)
 
 
 @dataclass

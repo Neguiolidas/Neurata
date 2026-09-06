@@ -178,13 +178,27 @@ def harvest(home: NeurataHome, target: str,
 
         known: dict = {}
         known_paths: dict = {}
-        for sk, chash, path_str in con.execute(
-                "SELECT source_key, content_hash, path FROM entries"
+        # Skip composto (v1.8): (content_hash, class, tags do índice) —
+        # comparar só o hash do corpo deixaria a re-colheita pós-1.8
+        # consumir itens cujos tags/class a fonte agora declara (o
+        # buraco que manteve entry_tags=0 por quatro releases).
+        for sk, chash, path_str, cls in con.execute(
+                "SELECT source_key, content_hash, path, class FROM entries"
                 " WHERE source_key LIKE ? ESCAPE '\\'"
                 " AND location='library'",
                 (_like_prefix(namespace),)).fetchall():
-            known[sk] = chash
+            known[sk] = (chash, cls, ())
             known_paths[sk] = path_str
+        # tags no índice já são lower-case (o writer normaliza)
+        for sk, tag in con.execute(
+                "SELECT e.source_key, t.tag FROM entry_tags t"
+                " JOIN entries e ON e.rowid = t.entry_rowid"
+                " WHERE e.source_key LIKE ? ESCAPE '\\'"
+                " AND e.location='library'",
+                (_like_prefix(namespace),)).fetchall():
+            if sk in known:
+                chash, cls, tags = known[sk]
+                known[sk] = (chash, cls, (*tags, tag))
     finally:
         con.close()
 
@@ -199,9 +213,16 @@ def harvest(home: NeurataHome, target: str,
         source_key = source_key_of(skill)
         scanned_keys.add(source_key)
         body_hash = hashlib.sha256(skill.body.encode("utf-8")).hexdigest()
-        if known.get(source_key) == body_hash:
+        # A emissão esperada é o triplo inteiro — corpo, classe da forma
+        # e tags — porque o skip tem que divergir quando QUALQUER campo
+        # muda na fonte, não só o corpo.
+        memory_class = FORMAT_CLASS.get(getattr(skill, "fmt", ""))
+        skill_tags = tuple(sorted(t.lower()
+                                  for t in getattr(skill, "tags", [])))
+        emission = (body_hash, memory_class, skill_tags)
+        if known.get(source_key) == emission:
             continue
-        if pending.get(source_key) == body_hash:
+        if pending.get(source_key) == emission:
             continue
         _emit_item(home, target, skill, source_key, body_hash)
         if source_key in known:
@@ -263,7 +284,13 @@ def _scan_inbox_pending(home: NeurataHome,
         else:
             content_hash = meta.get("content_hash") or hashlib.sha256(
                 body.encode("utf-8")).hexdigest()
-            pending[source_key] = content_hash
+            # mesmo triplo do `known`: (hash, class, tags lower-case)
+            raw_tags = meta.get("tags") or []
+            if isinstance(raw_tags, str):
+                raw_tags = [t.strip() for t in raw_tags.split(",")
+                            if t.strip()]
+            tags = tuple(sorted(str(t).lower() for t in raw_tags))
+            pending[source_key] = (content_hash, meta.get("class"), tags)
     return pending, pending_tombstones
 
 
@@ -283,6 +310,16 @@ def _emit_item(home: NeurataHome, target: str, skill, source_key: str,
         "created": now,
         "content_hash": body_hash,
     }
+    # Tags/aliases (v1.8): o que a FONTE declara vai ao frontmatter do
+    # espelho — é ali que o tick (e o reindex) os transformam em
+    # entry_tags e coluna FTS de peso 2.0. Fonte que não declara não
+    # escreve chave nenhuma.
+    skill_tags = getattr(skill, "tags", None)
+    if skill_tags:
+        meta["tags"] = [str(t) for t in skill_tags]
+    skill_aliases = getattr(skill, "aliases", None)
+    if skill_aliases:
+        meta["aliases"] = [str(a) for a in skill_aliases]
     # A classe do espelho é declarada pela forma que o adapter leu, e o
     # frontmatter do espelho é onde ela fica auditável. Item sem `fmt`
     # (provider de fora da árvore) ou formato fora do mapa não vira

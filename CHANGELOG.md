@@ -6,6 +6,61 @@ v0.4–v0.7 shipped under the 0.8.0 release. None of the 0.x versions was
 ever tagged or uploaded anywhere — they are development history, kept
 for the record. For anyone installing the package, 1.0.0 is the history.
 
+## [1.8.0] - 2026-09-06
+
+The roadmap's live-archive measurement killed an assumption: `entry_tags`
+was **0** across 15,015 grains, the `tag:` facet matched nothing, and
+`class` was NULL on 14,867 mirrors — four releases after the version that
+was supposed to fill them. The source always delivered the taxonomy
+(`osint.yml` declares `tags: [osint, honeypot, backdoor]`); the contract
+had no field to receive it, so no adapter read it, no mirror carried it,
+and the index indexed zero. 1.8 widens the contract, teaches the adapters,
+and makes the harvest actually re-collect. It also gives the search the
+ability to stop serving tombstoned grains — until now, marking a grain
+stale changed zero search results.
+
+### Added
+- **The `Scanned`/`Skill` contract carries `tags` and `aliases`** —
+  what the SOURCE declares, nothing invented. Adapters that read it:
+  `yaml` (both the PyYAML and the regex path), `skill-md`, `markdown`,
+  and `claude-code` SKILL.md frontmatter. `mdc` and the legacy dotfiles
+  declare no tags and stay empty — the adapter that has none returns
+  empty, never a guess.
+- **Harvest writes what the source declared** into the mirror's
+  frontmatter (`tags:`, `aliases:`), where the tick already turns them
+  into `entry_tags` and the weight-2.0 FTS column. The memory `class:`
+  rides the same pass (v1.3 wrote it only for harvests made after it
+  existed).
+- **Re-collection that actually re-collects**: the skip decision is now
+  the full emission — (body hash, class, tags) — not the body hash
+  alone. The first re-harvest after this release re-emits each mirror
+  once (in place, id preserved, journaled); the second is a no-op. The
+  tick's no-op shortcut learned the same comparison, or it would have
+  silently consumed the update. Tags/aliases are *substitutive* on
+  re-sync: if the source stops declaring them, the mirror stops too.
+- **`stale` reaches the index** (schema v14, additive, migrated in
+  place — no disk reads; the 87 s full reindex covers the archive). The
+  tombstone flow now updates the index row in the same crash-safe pass
+  that rewrites the file — before this, tombstoning wrote a field
+  nobody consulted.
+- **`--include-stale`** (CLI flag; `include_stale` parameter on
+  `query()`): tombstoned grains are excluded from results by default —
+  in the main pool before the cut, in the curated lane, and in facet
+  listings. **A flag, not a facet, on purpose**: every facet in the
+  grammar narrows the set; including the dead broadens it.
+
+### Changed
+- **Recall** (this is a behavior change, not an internal detail):
+  queries that today return tombstoned grains stop returning them.
+  Consumers that want the dead back pass `--include-stale`. Agents
+  consume results silently — the silent disappearance of a result is
+  the kind of thing that gets written down, so it is written here.
+- **Operation for an existing archive** (owner's archive, measured):
+  re-harvest each mirror namespace, then `neurata reindex` (87 s for
+  15,015 grains) — the re-harvest carries tags/aliases/class into the
+  frontmatter, the reindex fills any index drift (e.g. `source_path`
+  NULL on the live index) for free.
+
 ## [1.7.0] - 2026-09-06
 
 The densest signal already on disk — the project's own instruction

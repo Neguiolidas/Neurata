@@ -79,11 +79,11 @@ def test_harvest_reharvest_unchanged_emits_nothing(tmp_path):
     con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, content_hash, created, updated, grain_quality,"
-        " shingles, source_key) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " shingles, source_key, class) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (meta["id"], "a-skill", "library/a.md", "library", "skill",
          "generic", meta["title"], meta["description"],
          meta["content_hash"], meta["created"], meta["created"],
-         "mechanical", "[]", meta["source_key"]))
+         "mechanical", "[]", meta["source_key"], "procedural"))
     con.commit()
     f.unlink()
 
