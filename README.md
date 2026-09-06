@@ -104,6 +104,18 @@ neurata doctor
 neurata --version
 ```
 
+## Living links (wikilinks → graph)
+
+`[[wikilinks]]` in a grain's body become graph edges — resolved by
+slug, title or alias, deterministically, **at catalogue time**: every
+`tick` writes the edges of the grain it is cataloguing (and an edit
+that absorbs a body change rewrites them). Ambiguous targets (two
+grains sharing a title or alias) resolve to nothing, by the same rule
+the full reindex applies. Edges feed the Personalized PageRank leg of
+the ranking — a grain linked from the top results rises, with no LLM
+and no embedding. `neurata reindex` reconciles the whole graph (and
+backfills the alias table) whenever you want a full pass.
+
 ## Context bias (deterministic)
 
 The search knows where you are — the same way the deposit does since

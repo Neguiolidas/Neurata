@@ -33,8 +33,11 @@ _REMEDY = (
 # `contradictions` (caches re-deriváveis das afirmações normativas);
 # v14: ciclo de vida visível à busca — `entries.stale` espelha o
 # frontmatter do grão (a v1.5 deixou o tombstone só no arquivo, e a
-# busca que não consulta o marcador não muda um resultado).
-INDEX_SCHEMA_VERSION = 14
+# busca que não consulta o marcador não muda um resultado); v15:
+# `entry_aliases` — aliases normalizados em tabela, o que permite ao
+# TICK resolver wikilink por alias em SQL (o reindex resolve em
+# memória; a tabela é a ponte dos dois caminhos).
+INDEX_SCHEMA_VERSION = 15
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -44,6 +47,12 @@ CREATE TABLE IF NOT EXISTS entry_tags(
   PRIMARY KEY(entry_rowid, tag)
 );
 CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag);
+CREATE TABLE IF NOT EXISTS entry_aliases(
+  entry_id TEXT NOT NULL,
+  alias TEXT NOT NULL,
+  PRIMARY KEY(entry_id, alias)
+);
+CREATE INDEX IF NOT EXISTS idx_entry_aliases_alias ON entry_aliases(alias);
 CREATE TABLE IF NOT EXISTS edges(
   src_id TEXT NOT NULL,
   dst_id TEXT NOT NULL,
@@ -188,6 +197,7 @@ def entry_purge(con: sqlite3.Connection, rowid: int, entry_id: str) -> None:
     con.execute("DELETE FROM entries_fts WHERE rowid=?", (rowid,))
     con.execute("DELETE FROM curated_fts WHERE rowid=?", (rowid,))
     con.execute("DELETE FROM entry_tags WHERE entry_rowid=?", (rowid,))
+    con.execute("DELETE FROM entry_aliases WHERE entry_id=?", (entry_id,))
     # Afirmações e contradições moram no grão: aresta de contradição é
     # apagada nas DUAS direções, senão o sobrevivente do par continua
     # anotado como contradizendo um grão que não existe mais.
@@ -872,9 +882,31 @@ def _v13_to_v14(con: sqlite3.Connection, home: NeurataHome) -> None:
         raise
 
 
+def _v14_to_v15(con: sqlite3.Connection, home: NeurataHome) -> None:
+    """v14 → v15: aliases em tabela, para o tick resolver wikilink por
+    alias em SQL (v1.9). Antes da v1.8 o frontmatter dos espelhos não
+    tinha aliases — a tabela nasce VAZIA (migração não lê disco) e o
+    reindex full preenche no ciclo normal, igual ao `assertions` da
+    v13.
+    """
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        con.execute("CREATE TABLE IF NOT EXISTS entry_aliases("
+                    "entry_id TEXT NOT NULL, alias TEXT NOT NULL,"
+                    "PRIMARY KEY(entry_id, alias))")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_entry_aliases_alias"
+                    " ON entry_aliases(alias)")
+        con.execute("INSERT OR REPLACE INTO meta VALUES"
+                    " ('index_schema_version', '15')")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
 _MIGRATIONS = {
     7: _v7_to_v8, 8: _v8_to_v9, 9: _v9_to_v10, 10: _v10_to_v11,
-    11: _v11_to_v12, 12: _v12_to_v13, 13: _v13_to_v14,
+    11: _v11_to_v12, 12: _v12_to_v13, 13: _v13_to_v14, 14: _v14_to_v15,
 }
 
 
@@ -958,6 +990,7 @@ def drop_schema(con: sqlite3.Connection) -> None:
     con.execute("DROP TABLE IF EXISTS grains")
     con.execute("DROP TABLE IF EXISTS edges")
     con.execute("DROP TABLE IF EXISTS entry_tags")
+    con.execute("DROP TABLE IF EXISTS entry_aliases")
     con.execute("DROP TABLE IF EXISTS assertions")
     con.execute("DROP TABLE IF EXISTS contradictions")
     con.execute("DROP TABLE IF EXISTS entries")

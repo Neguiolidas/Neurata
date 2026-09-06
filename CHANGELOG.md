@@ -6,6 +6,43 @@ v0.4–v0.7 shipped under the 0.8.0 release. None of the 0.x versions was
 ever tagged or uploaded anywhere — they are development history, kept
 for the record. For anyone installing the package, 1.0.0 is the history.
 
+## [1.9.0] - 2026-09-06
+
+`edges` was **0** across the whole archive after a complete reindex —
+and the Personalized PageRank leg of the ranking (weight 0.3) had been
+influencing nothing for four releases. The full reindex resolved
+wikilinks by slug, title *and alias*, but the alias table it consulted
+was empty until 1.8 filled the frontmatter (the roadmap calls measuring
+edges before the harvest a false ceiling). And the `tick` — the path
+everything actually flows through day to day — never wrote an edge at
+all. 1.9 makes edges alive at catalogue time.
+
+### Added
+- **Edges written by the `tick`**: `_index_insert` resolves the body's
+  `[[wikilinks]]` and writes the graph edges in the same pass that
+  inserts the grain — slug first (unique), then title, then alias, with
+  the reindex's exact ambiguity rule (2+ candidates → no edge, no
+  arbitrary choice). Every door of the tick goes through it: first
+  catalogue, update-in-place (an absorbed edit that removes a link
+  removes the edge; one that adds it, restores it), and orphan
+  adoption. `TickReport` gains an `edges` counter.
+- **`entry_aliases` table** (schema v15, additive, migrated in place):
+  aliases in a real table so the tick can resolve them in SQL. Both
+  writers (tick and reindex) fill it from the same frontmatter that
+  feeds the FTS column; `entry_purge` cleans it; the migration creates
+  it empty (no disk reads — the 87 s full reindex backfills, same pact
+  as `assertions` in v13).
+- **PPR is live again**: with edges present, the graph leg of the
+  fusion changes result ordering — proven by test on a corpus where the
+  lexical winner loses to a graph neighbor once the edges exist, and
+  wins back when the edges are deleted.
+
+### Fixed
+- Aliases are now stored case-sensitively per the file but matched
+  lower-case by both resolvers, and `entry_purge` cleans `entry_aliases`
+  along with `entry_tags` — an orphaned alias would have made the tick
+  resolve links to a grain that no longer exists.
+
 ## [1.8.0] - 2026-09-06
 
 The roadmap's live-archive measurement killed an assumption: `entry_tags`

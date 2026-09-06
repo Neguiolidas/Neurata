@@ -31,6 +31,7 @@ from neurata.indexdb import (
     provenance,
     regime_of,
 )
+from neurata.reindex import _link_targets
 from neurata.snapshot import commit_tick, ensure_repo
 from neurata.textnorm import slugify
 from neurata.ulid import new_ulid
@@ -59,6 +60,7 @@ class TickReport:
     reconciled: int = 0  # órfãos write-then-log adotados via re-log (T2)
     absorbed: int = 0    # edição na mão em library/ absorvida (v1.2, §D8)
     contradictions: int = 0  # pares de contradição novos (v1.5)
+    edges: int = 0       # arestas de wikilink novas (v1.9)
     errors: "list[ItemError]" = field(default_factory=list)
     duration_ms: int = 0
     snapshot: "str | None" = None  # sha do commit deste tick, ou None (v0.6)
@@ -222,7 +224,8 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
 
     rel_dst = _relpath(home, dest)
     anteriores = indexdb.entry_contradictions(con, str(meta["id"]))
-    _index_insert(con, meta, body, rel_dst, "library", slug)
+    _rowid, n_edges = _index_insert(con, meta, body, rel_dst, "library",
+                                    slug)
     pairs = (_refresh_assertions(con, str(meta["id"]), body, anteriores)
              if regime_of(meta) == "curated" else [])
     con.commit()
@@ -233,6 +236,7 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
     if not ok:
         return
     _journal_contradictions(home, tick_id, pairs, report)
+    report.edges += n_edges
     literate_ok = True
     if literate:
         literate_ok = _journal(home, tick_id, "literate", str(meta["id"]),
@@ -315,9 +319,11 @@ def _catalog_skill_item(home: NeurataHome, con, tick_id: str, path: Path,
         return
 
     rel_dst = _relpath(home, dest)
-    _index_insert(con, meta, body, rel_dst, "library", slug)
+    _rowid, n_edges = _index_insert(con, meta, body, rel_dst, "library",
+                                    slug)
     con.commit()
     shingle_sets[str(meta["id"])] = frozenset(shingle_hashes(body))
+    report.edges += n_edges
 
     ok = _journal(home, tick_id, "catalog", str(meta["id"]), rel_src,
                  rel_dst, report, content_hash=content_hash)
@@ -374,7 +380,8 @@ def _sync_update_in_place(home: NeurataHome, con, tick_id: str, *,
         return
 
     _index_delete(con, entry_id)
-    _index_insert(con, merged, new_body, lib_rel_path, "library", slug)
+    _rowid, n_edges = _index_insert(con, merged, new_body, lib_rel_path,
+                                    "library", slug)
     con.commit()
     item_id = str(merged.get("id", entry_id))
     shingle_sets[item_id] = frozenset(shingle_hashes(new_body))
@@ -390,6 +397,7 @@ def _sync_update_in_place(home: NeurataHome, con, tick_id: str, *,
     if not ok:
         return
     report.updated += 1
+    report.edges += n_edges
 
 
 def _index_delete(con, entry_id: str) -> None:
@@ -642,7 +650,8 @@ def _reconcile_renames(home: NeurataHome, con, tick_id: str,
                 "SELECT 1 FROM entries WHERE slug=?", (slug,)).fetchone():
             continue  # colisão de slug num órfão: deixa pro reindex full.
         anteriores = indexdb.entry_contradictions(con, eid)
-        _index_insert(con, meta, body, rel, "library", slug)
+        _rowid, n_edges = _index_insert(con, meta, body, rel, "library",
+                                        slug)
         pairs = (_refresh_assertions(con, eid, body, anteriores)
                  if regime_of(meta) == "curated" else [])
         con.commit()
@@ -651,6 +660,7 @@ def _reconcile_renames(home: NeurataHome, con, tick_id: str,
         if not ok:
             continue
         _journal_contradictions(home, tick_id, pairs, report)
+        report.edges += n_edges
         report.processed += 1
 
 
@@ -750,13 +760,15 @@ def _absorb_edits(home: NeurataHome, con, tick_id: str,
 
         anteriores = indexdb.entry_contradictions(con, str(eid))
         _index_delete(con, eid)
-        _index_insert(con, merged, body, rel, "library", slug)
+        _rowid, n_edges = _index_insert(con, merged, body, rel, "library",
+                                        slug)
         pairs = _refresh_assertions(con, str(eid), body, anteriores)
         con.commit()
         if _journal(home, tick_id, "absorb", str(eid), None, rel, report,
                     content_hash=body_hash):
             report.absorbed += 1
         _journal_contradictions(home, tick_id, pairs, report)
+        report.edges += n_edges
 
 
 def _reconcile_journal_orphans(home: NeurataHome, con, tick_id: str,
@@ -878,10 +890,72 @@ def _journal_contradictions(home: NeurataHome, tick_id: str,
             report.contradictions += 1
 
 
+# ── arestas vivas (v1.9) ─────────────────────────────────────────────
+
+def _resolve_links(con, entry_id: str, body: str) -> int:
+    """Resolve os `[[alvos]]` do corpo e escreve as arestas do grão.
+
+    Ordem e semântica idênticas à passada 2 do reindex: slug → título →
+    alias (lower-case), 2+ candidatos = ambíguo → descarta (a régua do
+    `_AMBIG`), auto-link → descarta. O tick NÃO usa os mapas em memória
+    do reindex: a cada catálogo os mapas de lá não existem — aqui a
+    resolução é SQL (slug é UNIQUE; título/alias via COUNT).
+
+    Alias consulta `entry_aliases` (v1.9): antes da tabela, o resolvedor
+    consultava aliases que ninguém escreveu — o erro por falta de dado
+    que o roadmap chama de teto falso.
+
+    Devolve o nº de arestas NOVAS (o chamador soma no report). Chamado
+    DENTRO de `_index_insert`, então a aresta acompanha a inserção em
+    todas as portas do tick (catálogo, update, adoção) e o
+    `_index_delete` que antecede o re-insert limpa as arestas do corpo
+    velho — aresta viva é consequência do ponto único de escrita."""
+    alvos = _link_targets(body)
+    if not alvos:
+        return 0
+    novos = 0
+    vistos: set[str] = set()
+    for alvo in alvos:
+        dst = _resolve_sql(con, alvo)
+        if dst is None or dst == entry_id or dst in vistos:
+            continue
+        vistos.add(dst)
+        cur = con.execute("INSERT OR IGNORE INTO edges VALUES (?,?)",
+                          (entry_id, dst))
+        novos += cur.rowcount
+    return novos
+
+
+def _resolve_sql(con, alvo: str) -> "str | None":
+    """Id do grão que o alvo nomeia, ou None (ausente/ambíguo).
+
+    Mesma ordem de `_resolve` do reindex: slug exato → título
+    lower-case → alias lower-case. 2+ candidatos em título/alias é
+    ambiguidade — sem escolha arbitrária, nem aqui nem lá."""
+    row = con.execute("SELECT id FROM entries WHERE slug=?",
+                      (alvo,)).fetchone()
+    if row is not None:
+        return str(row[0])
+    rows = con.execute("SELECT id FROM entries WHERE lower(title)=lower(?)",
+                       (alvo,)).fetchall()
+    if len(rows) == 1:
+        return str(rows[0][0])
+    if len(rows) > 1:
+        return None
+    rows = con.execute(
+        "SELECT entry_id FROM entry_aliases WHERE lower(alias)=lower(?)",
+        (alvo,)).fetchall()
+    if len(rows) == 1:
+        return str(rows[0][0])
+    return None
+
+
 # ── índice incremental (subset de reindex._insert, sem grains/links) ─
 
 def _index_insert(con, meta: dict, body: str, rel: str, location: str,
-                  slug: str) -> int:
+                  slug: str) -> "tuple[int, int]":
+    """Devolve (rowid, n_edges) — o chamador soma as arestas novas no
+    report (v1.9)."""
     # reindex() indexa arquivos tanto em library/ quanto em inbox/, sob o
     # mesmo espaço de ids. Um item pendente no inbox pode já ter uma row
     # (location='inbox') criada por um reindex() anterior; ao catalogá-lo
@@ -936,7 +1010,11 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
     for tag in {t.lower() for t in tag_list}:
         con.execute("INSERT OR IGNORE INTO entry_tags VALUES (?,?)",
                    (rowid, tag))
-    return rowid
+    for alias in _aliases(meta):
+        con.execute("INSERT OR IGNORE INTO entry_aliases VALUES (?,?)",
+                    (str(meta["id"]), alias))
+    n_edges = _resolve_links(con, str(meta["id"]), body)
+    return rowid, n_edges
 
 
 def _aliases(meta: dict) -> "list[str]":

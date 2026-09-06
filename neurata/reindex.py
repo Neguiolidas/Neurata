@@ -253,6 +253,9 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
     for tag in {t.lower() for t in tag_list}:
         con.execute("INSERT OR IGNORE INTO entry_tags VALUES (?,?)",
                     (rowid, tag))
+    for alias in _aliases(meta):
+        con.execute("INSERT OR IGNORE INTO entry_aliases VALUES (?,?)",
+                    (str(meta["id"]), alias))
     _write_grains(con, str(meta["id"]), meta, body, old_grains, derived_hash)
     return rowid
 
