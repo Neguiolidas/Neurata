@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from neurata.frontmatter import FrontmatterError, parse
-from neurata.home import NeurataHome
+from neurata.home import NeurataHome, relposix
 
 
 class EntryNotFoundError(LookupError):
@@ -46,8 +46,7 @@ def resolve(home: NeurataHome, ref: str) -> EntryRef:
             f"entrada não encontrada: {ref!r} — verifique o id (ULID) ou "
             "o slug (nome do arquivo sem .md)")
     if len(matches) > 1:
-        paths = ", ".join(str(m.path.relative_to(home.root))
-                          for m in matches)
+        paths = ", ".join(relposix(m.path, home.root) for m in matches)
         raise EntryAmbiguousError(
             f"{ref!r} casa {len(matches)} entradas ({paths}) — use o id "
             "(ULID) completo para desambiguar")

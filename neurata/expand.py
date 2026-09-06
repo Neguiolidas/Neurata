@@ -13,7 +13,7 @@ from neurata import archive, usage
 from neurata.entryref import resolve
 from neurata.frontmatter import serialize
 from neurata.grains import make_card, make_summary
-from neurata.home import NeurataHome
+from neurata.home import NeurataHome, relposix
 from neurata.reindex import reindex
 
 _GRAINS = ("card", "summary", "full")
@@ -75,7 +75,7 @@ def _restore(home: NeurataHome, entry) -> dict:
     _atomic_write(entry.path, serialize(meta, full))
     reindex(home)
     return {"id": eid, "action": "restored",
-            "path": str(entry.path.relative_to(home.root))}
+            "path": relposix(entry.path, home.root)}
 
 
 def _atomic_write(path, text: str) -> None:

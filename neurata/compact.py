@@ -23,7 +23,7 @@ from neurata import archive
 from neurata.entryref import resolve
 from neurata.frontmatter import serialize
 from neurata.grains import make_summary
-from neurata.home import NeurataHome
+from neurata.home import NeurataHome, relposix
 from neurata.indexdb import LockHeldError, regime_of
 from neurata.reindex import reindex
 
@@ -31,7 +31,7 @@ from neurata.reindex import reindex
 def compact(home: NeurataHome, ref: str) -> dict:
     entry = resolve(home, ref)
     eid = str(entry.meta.get("id", ""))
-    rel = str(entry.path.relative_to(home.root))
+    rel = relposix(entry.path, home.root)
     if str(entry.meta.get("grain_quality", "")) == "refined":
         return {"action": "refused", "id": eid, "path": rel,
                 "reason": "grão refined — o Miner mecânico não rebaixa o que "

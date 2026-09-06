@@ -10,7 +10,7 @@ from neurata import archive, snapshot, usage
 from neurata import config as query_config
 from neurata.frontmatter import FrontmatterError
 from neurata.frontmatter import parse as parse_frontmatter
-from neurata.home import SCHEMA_VERSION, NeurataHome
+from neurata.home import SCHEMA_VERSION, NeurataHome, relposix
 from neurata.indexdb import INDEX_SCHEMA_VERSION, fts5_available
 
 _ARCHIVE_SAMPLE = 20
@@ -237,7 +237,7 @@ def _freshness(home: NeurataHome) -> Check:
     known = _indexed_hashes(home) if suspects else {}
     stale = []
     for path in suspects:
-        rel = str(path.relative_to(home.root))
+        rel = relposix(path, home.root)
         disk = _body_hash(path)
         # disk is None: ilegível/frontmatter quebrado — não dá pra provar
         # que o índice está em dia com ele; conta como stale.

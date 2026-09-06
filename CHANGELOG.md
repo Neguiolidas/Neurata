@@ -6,6 +6,54 @@ v0.4–v0.7 shipped under the 0.8.0 release. None of the 0.x versions was
 ever tagged or uploaded anywhere — they are development history, kept
 for the record. For anyone installing the package, 1.0.0 is the history.
 
+## [1.4.1] - 2026-09-05
+
+A full audit of the codebase (entire package read, suite, ruff, pyright,
+bandit, vulture, plus repro scripts for each suspicion) found bugs that
+the Linux CI cannot see — and one that no platform can. None of them
+lost data; two silently corrupted bookkeeping.
+
+### Fixed
+- **`compact` followed by `tick` corrupted the deposit hash.** The
+  tick's manual-edit detector compared the served body against
+  `content_hash` — the hash of the *deposited* body. For a compacted
+  grain the two diverge by construction (v1.4 §2/D-1), so the first tick
+  after any `compact` "absorbed" the untouched grain: it overwrote the
+  frontmatter `content_hash` with the summary's hash and stamped
+  `updated`, resetting the grain's shelf recency. The detector now
+  compares against what the index expects to serve (`derived_hash` when
+  the grain is compacted, `content_hash` otherwise), the same pact the
+  write-then-log reconciler already used — and it no longer stamps
+  `updated` for a compacted grain, because changing representation is
+  not the grain saying something new.
+- **`project` on Windows stored the whole path.** The envelope resolves
+  the git root with `Path(...).resolve()`, which produces backslashes on
+  Windows; `project_of` then ran `PurePosixPath`, which treats `\` as an
+  ordinary character and returned the full path (`C:\repo\Projeto`) as
+  the project name instead of `Projeto`. Separators are now unified
+  before the basename is taken. Every deposited grain on Windows had
+  this: the `project:` facet matched nothing.
+- **A CRLF file lost its entire frontmatter.** `frontmatter.parse`
+  required `---\n` byte-for-byte; a note edited in a Windows editor
+  (or any CRLF source read by the generic provider, which decodes raw
+  bytes) parsed as frontmatter-less body — id, title and type gone, the
+  grain reported `missing-id` by `reindex`, and body hashes differed
+  between platforms, making mirror re-sync see phantom changes. Parse
+  now normalizes CRLF, and the generic provider normalizes the text it
+  reads, so the same source yields the same grain on every OS.
+- **Relative paths were OS-native.** The journal, `entries.path`,
+  deposit logs and CLI output used the platform separator —
+  `inbox\a.md` on Windows against the POSIX-style contract the journal
+  guard itself enforces. All relative paths are now POSIX everywhere
+  (`relposix`), so journals and indexes are portable and
+  string-comparable across machines.
+- The journal path guard now also rejects Windows-form traversal
+  (`..\x.md` used to pass, because `PurePosixPath` sees one component)
+  and drive-absolute paths.
+- Test-suite portability: `os.geteuid()` guards crashed collection/run
+  on Windows; unreadable-file simulations now skip on non-POSIX, and
+  one assertion compared paths with a hardcoded `/`.
+
 ## [1.4.0] - 2026-08-15
 
 Compacting a grain used to mean losing track of what it originally said.

@@ -41,12 +41,12 @@ def test_scan_skips_dir_without_skill_md(tmp_path):
     assert skills == []
     assert len(skipped) == 1
     assert skipped[0].reason == "no SKILL.md"
-    assert skipped[0].path.endswith("baz/SKILL.md")
+    assert skipped[0].path.replace("\\", "/").endswith("baz/SKILL.md")
 
 
 def test_scan_skips_unreadable_skill_md(tmp_path):
-    if os.geteuid() == 0:
-        pytest.skip("root ignora permissões de arquivo")
+    if os.name != "posix" or os.geteuid() == 0:
+        pytest.skip("simular arquivo ilegível requer POSIX sem root")
     path = _write_skill(tmp_path, "unreadable", "name: x\ndescription: y")
     os.chmod(path, 0o000)
     try:

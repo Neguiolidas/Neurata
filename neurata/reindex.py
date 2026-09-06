@@ -21,7 +21,7 @@ from datetime import datetime, timezone
 from neurata.dedup import pack_shingles, shingle_hashes
 from neurata.frontmatter import FrontmatterError, parse
 from neurata.grains import make_card, make_summary
-from neurata.home import NeurataHome
+from neurata.home import NeurataHome, relposix
 from neurata.indexdb import (
     INDEX_SCHEMA_VERSION,
     IndexLock,
@@ -71,7 +71,7 @@ def _reindex_locked(home: NeurataHome, con: sqlite3.Connection) -> dict:
     for location, base in (("library", home.library),
                            ("inbox", home.inbox)):
         for path in sorted(base.rglob("*.md")):
-            rel = str(path.relative_to(home.root))
+            rel = relposix(path, home.root)
             try:
                 text = path.read_text(encoding="utf-8")
             except OSError:

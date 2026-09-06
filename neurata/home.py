@@ -24,6 +24,19 @@ def _safe_log_name(name: str) -> str:
     return name
 
 
+def relposix(path: "Path", root: "Path") -> str:
+    """Relativo a `root` em separadores POSIX — formato canônico de todo
+    path relativo que o Neurata grava (journal, `entries.path`, saída de
+    CLI), em qualquer sistema.
+
+    O separador nativo do Windows (`\\`) deixaria o journal e o índice
+    dependentes de plataforma: a comparação de string entre registros e
+    entre máquinas quebra, e o guard `_is_safe_journal_path` (PurePosixPath)
+    enxergaria `inbox\\a.md` como um componente só. `as_posix()` resolve;
+    `root / rel` reconstrói o caminho em qualquer SO."""
+    return path.relative_to(root).as_posix()
+
+
 class NeurataHome:
     def __init__(self, root: "Path | str | None" = None):
         if root is not None:

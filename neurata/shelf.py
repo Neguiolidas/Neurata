@@ -16,7 +16,7 @@ from neurata import config as query_config
 from neurata import usage
 from neurata.frontmatter import FrontmatterError
 from neurata.frontmatter import parse as parse_fm
-from neurata.home import NeurataHome
+from neurata.home import NeurataHome, relposix
 from neurata.indexdb import connect
 
 
@@ -151,7 +151,7 @@ def conflicts(home: NeurataHome) -> dict:
             if cw:
                 manual.append({
                     "id": str(meta.get("id", "")),
-                    "path": str(path.relative_to(home.root)),
+                    "path": relposix(path, home.root),
                     "conflicts_with": cw,
                 })
     collisions = []

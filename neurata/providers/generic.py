@@ -162,6 +162,12 @@ def _read_text(path: Path, max_size: int) -> "tuple[str | None, str]":
         text = data.decode("utf-8")
     except UnicodeDecodeError as e:
         return None, f"not utf-8: {e}"
+    # Newlines normalizados: a mesma fonte lida no Linux e no Windows tem
+    # que produzir o mesmo corpo (e o mesmo content_hash), senão o re-sync
+    # vê mudança que não existe a cada colheita. Corpo colhido com CRLF
+    # cru, gravado de volta no inbox, voltava a parsear com o dobro de
+    # linhas em branco — leitura em bytes não tem universal newlines.
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
     if not text.strip():
         return None, "empty"
     return text, ""

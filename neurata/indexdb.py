@@ -273,7 +273,11 @@ def project_of(meta: dict) -> "str | None":
     root = src.get("git_root") if isinstance(src, dict) else None
     if not isinstance(root, str) or not root.strip():
         return None
-    return PurePosixPath(root.strip()).name or None
+    # O envelope resolve a raiz com `Path(...).resolve()` (envelope.py), que
+    # no Windows devolve backslashes — e PurePosixPath os trata como
+    # caractere comum, devolvendo o caminho INTEIRO como "projeto".
+    # Unificar pra `/` antes de extrair o basename; no Linux é no-op.
+    return PurePosixPath(root.strip().replace("\\", "/")).name or None
 
 
 class FTS5MissingError(RuntimeError):

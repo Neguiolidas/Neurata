@@ -5,7 +5,7 @@ from pathlib import Path
 
 from neurata.envelope import capture
 from neurata.frontmatter import serialize
-from neurata.home import NeurataHome
+from neurata.home import NeurataHome, relposix
 from neurata.textnorm import slugify
 from neurata.ulid import new_ulid
 
@@ -66,7 +66,7 @@ def deposit(home: NeurataHome, content: "str | None" = None,
         "content_hash": content_hash,
     }
     path.write_text(serialize(meta, content), encoding="utf-8")
-    rel = str(path.relative_to(home.root))
+    rel = relposix(path, home.root)
     # Write-then-log é não atômico: um crash entre as duas linhas deixa um
     # arquivo órfão (sem evento "created" no log). A verificação de
     # existência em _find_previous (FIX 1) cobre a direção inversa —
@@ -101,8 +101,8 @@ def _find_previous(home: NeurataHome, content_hash: str) -> "dict | None":
             continue
         # Um "created" no log só conta como duplicata viva se o arquivo
         # que ele aponta ainda existe. `path` é gravado relativo a
-        # home.root (ver `rel = str(path.relative_to(home.root))` acima),
-        # então resolvemos do mesmo jeito para checar existência.
+        # home.root em POSIX (ver `relposix` acima), então resolvemos do
+        # mesmo jeito para checar existência.
         recorded_path = rec.get("path")
         if not recorded_path or not (home.root / recorded_path).is_file():
             continue

@@ -15,12 +15,12 @@ import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from neurata import indexdb
 from neurata.dedup import NEAR_DUP_JACCARD, jaccard, pack_shingles, shingle_hashes
 from neurata.frontmatter import FrontmatterError, parse, serialize
-from neurata.home import NeurataHome
+from neurata.home import NeurataHome, relposix
 from neurata.indexdb import (
     IndexLock,
     class_of,
@@ -482,8 +482,13 @@ def _is_safe_journal_path(path: "str | None") -> bool:
     fora da árvore do repo via journal com path malicioso/corrompido)."""
     if path is None:
         return True
-    pure = PurePosixPath(path)
-    if pure.is_absolute():
+    # Backslash é separador no Windows, mas caractere comum pro
+    # PurePosixPath — `..\\x.md` viria como UM componente e passaria.
+    # Unificar pra `/` antes de julgar; caminho absoluto de drive
+    # (`C:\\...`) não é absoluto em semântica POSIX, então a segunda
+    # checagem cobre a forma nativa do Windows.
+    pure = PurePosixPath(path.replace("\\", "/"))
+    if pure.is_absolute() or PureWindowsPath(path).is_absolute():
         return False
     return ".." not in pure.parts
 
@@ -510,7 +515,7 @@ def _journal(home: NeurataHome, tick_id: str, verb: str,
 
 
 def _relpath(home: NeurataHome, path: Path) -> str:
-    return str(path.relative_to(home.root))
+    return relposix(path, home.root)
 
 
 def _now() -> str:
@@ -530,7 +535,7 @@ def _reconcile_renames(home: NeurataHome, con, tick_id: str,
 
     disk_files: dict = {}
     for p in sorted(home.library.rglob("*.md")):
-        rel = str(p.relative_to(home.root))
+        rel = relposix(p, home.root)
         if rel in index_paths:
             continue
         try:
@@ -630,7 +635,7 @@ def _absorb_edits(home: NeurataHome, con, tick_id: str,
 
     Varre os curados (espelho é cache de fonte externa: a superfície de
     edição dele é o vault, e o harvest já reescreve o arquivo na volta
-    seguinte). Se `sha256(body)` bate com o `content_hash` indexado, nada
+    seguinte). Se `sha256(body)` bate com o `derived_hash` indexado, nada
     acontece — o caso comum. Se difere:
 
     - **Guarda de identidade:** só absorve se o `id` do arquivo bate com
@@ -642,7 +647,12 @@ def _absorb_edits(home: NeurataHome, con, tick_id: str,
       não há meta novo vindo de lugar nenhum — mexendo só em
       `content_hash`/`updated` e limpando `stale`/`stale_since`. Sem
       isso, `doctor` seguiria acusando divergência de freshness depois
-      de um tick que já absorveu.
+      de um tick que já absorveu. Grão compactado (`derived_from` no
+      arquivo) não tem nenhum dos dois carimbos tocados: `content_hash`
+      é o hash do DEPÓSITO e o corpo servido é summary, divergindo dele
+      por construção (v1.4 §2/D-1) — e `updated` não anda porque
+      compactar/editar-representação não é o grão dizendo algo novo
+      (mesma régua do `compact`, que nunca carimba).
     - Arquivo ilegível ou com frontmatter quebrado: pula em silêncio.
       Julgar integridade é trabalho do `doctor`, que já reporta esses
       arquivos; repetir o diagnóstico a cada tick só produziria ruído.
@@ -656,16 +666,29 @@ def _absorb_edits(home: NeurataHome, con, tick_id: str,
     frontmatter não realimenta o laço.
     """
     rows = con.execute(
-        "SELECT id, slug, path, content_hash FROM entries"
-        " WHERE location='library' AND regime='curated'").fetchall()
-    for eid, slug, rel, chash in rows:
+        "SELECT id, slug, path, derived_hash, content_hash, derived_from"
+        " FROM entries WHERE location='library' AND regime='curated'"
+        ).fetchall()
+    for eid, slug, rel, dhash, chash, dfrom in rows:
         full = home.root / rel
         try:
             meta, body = parse(full.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, FrontmatterError):
             continue
-        content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
-        if content_hash == chash:
+        body_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+        # O detector compara contra o corpo que o índice ESPERA servir:
+        # num grão compactado (derived_from indexado) o corpo servido é
+        # summary e diverge do `content_hash` POR CONSTRUÇÃO (v1.4 §2/D-1)
+        # — conferir contra ele absorvia todo grão compactado intacto a
+        # cada tick, sobrescrevendo o hash do depósito com o do summary.
+        # Nesses, o parâmetro é `derived_hash` (mesmo pacto do
+        # `_reconcile_journal_orphans`). Grão NÃO compactado compara
+        # contra `content_hash`: é o próprio corpo depositado, então
+        # qualquer divergência é edição real — inclusive o estado
+        # "reindex rodou depois de uma edição nunca absorvida", em que o
+        # índice já serve o corpo novo mas o frontmatter ficou velho.
+        expected = dhash if dfrom else chash
+        if body_hash == expected:
             continue
         if str(meta.get("id", "")) != str(eid):
             continue  # troca de identidade: quem julga é o passo 3
@@ -673,8 +696,13 @@ def _absorb_edits(home: NeurataHome, con, tick_id: str,
         merged = dict(meta)
         merged.pop("stale", None)
         merged.pop("stale_since", None)
-        merged["content_hash"] = content_hash
-        merged["updated"] = _now()
+        # O que se escreve decide o ARQUIVO (a verdade), não o índice —
+        # cobre o estado `compacted-pending-index` (índice ainda vendo o
+        # grão como não compactado): o catch-up do absorb não pode
+        # carimbar `content_hash`/`updated` por cima de uma compactação.
+        if not meta.get("derived_from"):
+            merged["content_hash"] = body_hash
+            merged["updated"] = _now()
         try:
             full.write_text(serialize(merged, body), encoding="utf-8")
         except OSError as exc:
@@ -685,7 +713,7 @@ def _absorb_edits(home: NeurataHome, con, tick_id: str,
         _index_insert(con, merged, body, rel, "library", slug)
         con.commit()
         if _journal(home, tick_id, "absorb", str(eid), None, rel, report,
-                    content_hash=content_hash):
+                    content_hash=body_hash):
             report.absorbed += 1
 
 

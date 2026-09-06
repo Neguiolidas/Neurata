@@ -89,7 +89,9 @@ def test_slug_collision_skipped(tmp_path):
     assert result["skipped"][0]["reason"] == "slug-collision"
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason="root lê arquivos chmod 000")
+@pytest.mark.skipif(os.name == "nt" or (os.name == "posix"
+                                        and os.geteuid() == 0),
+                    reason="simular arquivo ilegível requer POSIX sem root")
 def test_unreadable_file_skipped_not_fatal(tmp_path):
     home = _home(tmp_path)
     (home.library / "ok.md").write_text("---\nid: 01OK\ntitle: Ok\n---\nc\n")

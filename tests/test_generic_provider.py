@@ -125,8 +125,8 @@ def test_walk_skips_empty_file(tmp_path):
 
 
 def test_walk_skips_unreadable_file(tmp_path):
-    if os.geteuid() == 0:
-        pytest.skip("root ignora permissões de arquivo")
+    if os.name != "posix" or os.geteuid() == 0:
+        pytest.skip("simular arquivo ilegível requer POSIX sem root")
     path = _write(tmp_path, "secreto.md")
     os.chmod(path, 0o000)
     try:

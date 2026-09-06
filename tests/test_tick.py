@@ -1530,3 +1530,17 @@ def _mirror(home, n, body=None):
     return eid
 
 
+
+
+# ── v1.4.1: guard de journal contra forma nativa do Windows ─────────
+
+def test_journal_guard_rejects_backslash_traversal():
+    """Travessia com backslash (forma nativa do Windows) não pode passar:
+    o PurePosixPath veria um componente único."""
+    bs = chr(92)  # backslash, sem depender de escape no fonte
+    from neurata.tick import _is_safe_journal_path
+    assert _is_safe_journal_path(f"..{bs}inbox{bs}a.md") is False
+    assert _is_safe_journal_path(f"C:{bs}abs{bs}path.md") is False
+    assert _is_safe_journal_path(f"inbox{bs}a.md") is True  # relativo é ok
+    assert _is_safe_journal_path("inbox/a.md") is True
+    assert _is_safe_journal_path(None) is True

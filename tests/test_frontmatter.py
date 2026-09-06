@@ -59,3 +59,15 @@ def test_serialize_deep_dict_raises():
 def test_serialize_list_in_dict_raises():
     with pytest.raises(FrontmatterError):
         serialize({"a": {"b": ["x"]}}, "")
+
+
+def test_parse_tolerates_crlf():
+    """Arquivo editado em editor Windows chega com `---\r\n`: sem
+    normalizar, o frontmatter inteiro viraria corpo (id/title/type
+    perdidos, grão missing-id no reindex)."""
+    meta, body = parse("---\r\nid: 01CRLF\r\ntitle: Teste\r\n"
+                       "tags: [a, b]\r\n---\r\ncorpo com CRLF\r\n")
+    assert meta["id"] == "01CRLF"
+    assert meta["title"] == "Teste"
+    assert meta["tags"] == ["a", "b"]
+    assert body == "corpo com CRLF\n"

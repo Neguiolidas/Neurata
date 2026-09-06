@@ -230,3 +230,68 @@ def test_absorb_ignores_mirrors(tmp_path):
     report = curate_tick(home)
     assert report.absorbed == 0
     assert _linha(home, eid)[1] == hash_antes
+
+
+# ── v1.4.1: absorb × grão compactado ─────────────────────────────────
+
+_CORPO_COMPACTAVEL = "\n\n".join(
+    f"Paragrafo {i} com texto suficiente para ser uma secao real do "
+    "documento que o summary precisa encolher de verdade." for i in range(20))
+
+
+def test_absorb_ignores_compacted_grain(tmp_path):
+    """Compactar troca a representação servida, não o que o grão diz: o
+    `content_hash` (hash do DEPÓSITO) não pode mudar, e o tick seguinte
+    não pode 'absorver' um grão que ninguém editou. O detector de edição
+    compara o corpo contra `derived_hash` (corpo SERVIDO), não contra
+    `content_hash` — mesmo pacto do passo de reconciliação de órfãos."""
+    from neurata.compact import compact
+
+    home = _home(tmp_path)
+    _rel, eid = _catalogado(home, "a.md", _CORPO_COMPACTAVEL)
+    chash_antes = _linha(home, eid)[1]
+    assert compact(home, eid)["action"] == "compacted"
+
+    report = curate_tick(home)
+    assert report.absorbed == 0
+
+    con = connect(home)
+    try:
+        chash, derived_from = con.execute(
+            "SELECT content_hash, derived_from FROM entries WHERE id=?",
+            (eid,)).fetchone()
+    finally:
+        con.close()
+    assert chash == chash_antes
+    assert derived_from  # identidade de derivação intacta
+
+
+def test_absorb_edited_compacted_summary_keeps_deposit_hash(tmp_path):
+    """Editar a mão o CORPO SERVIDO de um grão compactado é edição real:
+    absorb roda, mas grava o hash novo como `derived_hash` (servido) e
+    preserva o `content_hash` (depósito) — que continua respondendo pelo
+    corpo original no archive."""
+    from neurata.compact import compact
+
+    home = _home(tmp_path)
+    rel, eid = _catalogado(home, "a.md", _CORPO_COMPACTAVEL)
+    assert compact(home, eid)["action"] == "compacted"
+    chash_deposito = _linha(home, eid)[1]
+
+    caminho = home.root / rel
+    _meta, summary = parse(caminho.read_text(encoding="utf-8"))
+    _reescreve(home, rel, corpo=summary + "\n\nNota adicionada a mao.")
+
+    report = curate_tick(home)
+    assert report.absorbed == 1
+
+    con = connect(home)
+    try:
+        chash, dhash, derived_from = con.execute(
+            "SELECT content_hash, derived_hash, derived_from FROM entries"
+            " WHERE id=?", (eid,)).fetchone()
+    finally:
+        con.close()
+    assert chash == chash_deposito  # hash do depósito intacto
+    assert dhash != chash_deposito  # corpo servido diverge do depósito
+    assert derived_from             # e o original segue no archive

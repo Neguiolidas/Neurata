@@ -14,6 +14,15 @@ class FrontmatterError(ValueError):
 
 
 def parse(text: str) -> tuple[dict, str]:
+    if "\r" in text:
+        # Arquivo editado em editor Windows chega com CRLF (e o provider
+        # genérico decodifica bytes crus, sem universal newlines): sem
+        # normalizar, `---\r\n` não casa o delimitador e o frontmatter
+        # inteiro vira corpo — id/title/type perdidos, grão vira
+        # missing-id no reindex e o hash do corpo muda de plataforma para
+        # plataforma. Leitores via read_text já chegam em LF; para eles a
+        # normalização é no-op.
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
     if not text.startswith("---\n"):
         return {}, text
     end = text.find("\n---\n", 3)
