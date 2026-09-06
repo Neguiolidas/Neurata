@@ -256,11 +256,12 @@ def test_absorbed_appears_in_subject(tmp_path):
     assert _tick_subject(report) == "snapshot: ↻2 absorvido"
 
 
-def test_contract_version_is_four():
+def test_contract_version_is_five():
     """Aditivo, mas o precedente da v0.6 (campo `snapshot`) bumpou por
     aditivo: consumidor que fixa versão merece saber que o envelope
-    cresceu."""
-    assert CONTRACT_VERSION == 4
+    cresceu. v1.5: cards ganham `superseded_by`/`contradicts`, journal
+    ganha `contradiction`/`supersede`."""
+    assert CONTRACT_VERSION == 5
 
 
 def test_tick_body_processed_extra_gated_on_literate_not_processed():

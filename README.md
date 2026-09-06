@@ -70,6 +70,17 @@ neurata compact <id>         # no-op unless it actually shrinks; refuses
 # what the archive itself flags
 neurata shelf --conflicts    # near-duplicates and id/slug collisions
 
+# contradictions: "use X" vs "never use X" — same target, opposite
+# polarity, detected deterministically at tick/reindex (no LLM)
+neurata contradictions            # report: open pairs, resolved count
+neurata contradictions --resolve  # apply the deterministic winner rule
+neurata supersede <id> --by <id>  # or pick the winner yourself; the
+                                  # loser is marked in its frontmatter
+                                  # (`superseded_by`), never deleted
+neurata query "term status:superseded"  # and search stops being blind:
+                                        # cards carry `contradicts` and
+                                        # superseded grains sink
+
 # mirror an external source into the inbox (then `tick` catalogues it)
 neurata harvest                        # default provider: claude-code skills
 neurata harvest ~/some/dir             # or any directory, format auto-detected

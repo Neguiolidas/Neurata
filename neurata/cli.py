@@ -35,6 +35,12 @@ from neurata.snapshot import (
     restore_dry_run,
     set_remote,
 )
+from neurata.supersede import (
+    SupersedeError,
+    contradictions_report,
+    resolve_all,
+    supersede,
+)
 from neurata.tick import TickStructuralError, curate_tick
 from neurata.usage import log_invocation
 
@@ -80,7 +86,7 @@ def main(argv: "list[str] | None" = None) -> int:
     except (ConfigError, DepositError, EntryAmbiguousError,
             EntryNotFoundError, ExpandError, FTS5MissingError,
             IndexSchemaError, LockHeldError, QueryError, SnapshotError,
-            OSError) as exc:
+            SupersedeError, OSError) as exc:
         _emit_error(args, exc)
         rc = 2
     # Barreira final: a CLI nunca vaza traceback. Qualquer exceção não
@@ -147,6 +153,12 @@ def _dispatch(args: argparse.Namespace, home: NeurataHome) -> tuple[dict, int]:
                 exit_code(checks))
     if args.command == "compact":
         return compact(home, args.ref), 0
+    if args.command == "supersede":
+        return supersede(home, args.ref, args.by), 0
+    if args.command == "contradictions":
+        if args.resolve:
+            return resolve_all(home), 0
+        return contradictions_report(home), 0
     if args.command == "expand":
         return expand(home, args.ref, grain=args.grain,
                       restore=args.restore), 0
@@ -294,6 +306,23 @@ def _build_parser() -> argparse.ArgumentParser:
     cpt.add_argument("--json", action="store_true",
                      default=argparse.SUPPRESS)
 
+    sup = sub.add_parser("supersede", help="marca um grão como substituído "
+                         "por outro (utilitário)")
+    sup.add_argument("ref", help="id ou slug do grão substituído (perdedor)")
+    sup.add_argument("--by", dest="by", required=True,
+                     help="id ou slug do grão que o substitui (vencedor)")
+    sup.add_argument("--json", action="store_true",
+                     default=argparse.SUPPRESS)
+
+    ctr = sub.add_parser("contradictions",
+                         help="contradições detectadas no acervo "
+                         "(utilitário)")
+    ctr.add_argument("--resolve", action="store_true",
+                     help="aplica a regra determinística de vencedor a "
+                     "todos os pares em aberto (journaled)")
+    ctr.add_argument("--json", action="store_true",
+                     default=argparse.SUPPRESS)
+
     exp = sub.add_parser("expand", help="grão maior sob demanda")
     exp.add_argument("ref", help="id ou slug")
     exp.add_argument("--grain", choices=_GRAINS,
@@ -382,6 +411,10 @@ def _emit(args: argparse.Namespace, result: dict, rc: int = 0) -> None:
             line = f"{score} {c['slug']} — {c['title']}"
             if c.get("snippet"):
                 line += f" ({c['snippet'][:100]})"
+            if c.get("superseded_by"):
+                line += f" ↺ substituído por {c['superseded_by']}"
+            if c.get("contradicts"):
+                line += f" ⚠ contradiz {len(c['contradicts'])}"
             print(line)
         if not result["results"]:
             print("(sem resultados)")
@@ -393,6 +426,29 @@ def _emit(args: argparse.Namespace, result: dict, rc: int = 0) -> None:
             if c["remedy"]:
                 line += f" — {c['remedy']}"
             print(line)
+        return
+    if args.command == "supersede":
+        if result.get("action") == "noop":
+            print(f"nada a fazer: {result['reason']}")
+            return
+        print(f"superseded {result['loser']} -> {result['winner']} "
+              f"({result['path']}); índice: {result['index']}")
+        return
+    if args.command == "contradictions":
+        if args.resolve:
+            print(f"resolvidos: {result['resolved_count']}")
+            for r in result["resolved"]:
+                print(f"  {r['loser']} -> {r['winner']} sobre {r['target']}")
+            print(f"índice: {result['index']}")
+            return
+        print(f"pares em aberto: {result['open_count']} "
+              f"(resolvidos: {result['resolved_count']}; "
+              f"afirmações: {result['assertions']})")
+        for p in result["open"]:
+            print(f"  ⚠ {p['target']}: [{p['a_pol']}] {p['a_title']}"
+                  f" × [{p['b_pol']}] {p['b_title']}")
+        if not result["open"]:
+            print("(sem contradições em aberto)")
         return
     if args.command == "expand" and "text" in result:
         print(result["text"])

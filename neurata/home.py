@@ -5,7 +5,10 @@ import re
 from pathlib import Path
 
 SCHEMA_VERSION = 1
-CONTRACT_VERSION = 4  # v1.2: envelope do tick ganha a linha `absorve:`
+# v1.5: cards de query ganham `superseded_by`/`contradicts`; journal ganha
+# os verbos `contradiction` e `supersede`; CLI ganha `supersede` e
+# `contradictions`. Tudo aditivo — consumidores antigos seguem parseando.
+CONTRACT_VERSION = 5
 
 _DIRS = ("library", "inbox", "archive", "quarantine", "logs")
 
@@ -35,6 +38,20 @@ def relposix(path: "Path", root: "Path") -> str:
     enxergaria `inbox\\a.md` como um componente só. `as_posix()` resolve;
     `root / rel` reconstrói o caminho em qualquer SO."""
     return path.relative_to(root).as_posix()
+
+
+def atomic_write_text(path: "Path", text: str) -> None:
+    """Escrita atômica tmp+replace no MESMO diretório — o contrato
+    crash-safe de todo writer que toca arquivo-verdade (compact, expand,
+    supersede). Crash no meio deixa o tmp órfão, nunca o arquivo meio
+    escrito."""
+    tmp = path.parent / f".tmp-{os.getpid()}-{path.name}"
+    try:
+        tmp.write_text(text, encoding="utf-8")
+        os.replace(tmp, path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
 
 
 class NeurataHome:

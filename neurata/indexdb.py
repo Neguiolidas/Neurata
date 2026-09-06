@@ -27,8 +27,11 @@ _REMEDY = (
 # da derivação (`derived_hash`) e `edges` rechaveada por `id`; v11: identidade
 # de derivação do espelho compactado (`derived_from`) — os writers passam a
 # preencher `derived_hash`/`source_path`, mortas desde a v10; v12: `shingles`
-# empacotada em blob de 8 B por shingle (era JSON, 2,5× maior).
-INDEX_SCHEMA_VERSION = 12
+# empacotada em blob de 8 B por shingle (era JSON, 2,5× maior); v13:
+# contradição de verdade — `entries.superseded_by` (derivada do
+# frontmatter, mesmo pacto de `derived_from`), `assertions` e
+# `contradictions` (caches re-deriváveis das afirmações normativas).
+INDEX_SCHEMA_VERSION = 13
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -42,6 +45,20 @@ CREATE TABLE IF NOT EXISTS edges(
   src_id TEXT NOT NULL,
   dst_id TEXT NOT NULL,
   PRIMARY KEY(src_id, dst_id)
+);
+CREATE TABLE IF NOT EXISTS assertions(
+  entry_id TEXT NOT NULL,
+  target TEXT NOT NULL,
+  polarity TEXT NOT NULL CHECK(polarity IN ('pos','neg')),
+  PRIMARY KEY(entry_id, target, polarity)
+);
+CREATE TABLE IF NOT EXISTS contradictions(
+  a_id TEXT NOT NULL,
+  b_id TEXT NOT NULL,
+  target TEXT NOT NULL,
+  a_pol TEXT NOT NULL CHECK(a_pol IN ('pos','neg')),
+  b_pol TEXT NOT NULL CHECK(b_pol IN ('pos','neg')),
+  PRIMARY KEY(a_id, b_id, target)
 );
 CREATE TABLE IF NOT EXISTS grains(
   entry_id TEXT NOT NULL,
@@ -75,7 +92,8 @@ CREATE TABLE IF NOT EXISTS entries(
   class TEXT,
   source_path TEXT,
   derived_hash TEXT,
-  derived_from TEXT
+  derived_from TEXT,
+  superseded_by TEXT
 );
 """
 
@@ -166,6 +184,12 @@ def entry_purge(con: sqlite3.Connection, rowid: int, entry_id: str) -> None:
     con.execute("DELETE FROM entries_fts WHERE rowid=?", (rowid,))
     con.execute("DELETE FROM curated_fts WHERE rowid=?", (rowid,))
     con.execute("DELETE FROM entry_tags WHERE entry_rowid=?", (rowid,))
+    # Afirmações e contradições moram no grão: aresta de contradição é
+    # apagada nas DUAS direções, senão o sobrevivente do par continua
+    # anotado como contradizendo um grão que não existe mais.
+    con.execute("DELETE FROM assertions WHERE entry_id=?", (entry_id,))
+    con.execute("DELETE FROM contradictions WHERE a_id=? OR b_id=?",
+                (entry_id, entry_id))
     con.execute("DELETE FROM edges WHERE src_id=? OR dst_id=?",
                 (entry_id, entry_id))
     con.execute("DELETE FROM entries WHERE id=?", (entry_id,))
@@ -775,10 +799,119 @@ def _v11_to_v12(con: sqlite3.Connection, home: NeurataHome) -> None:
         raise
 
 
+_V13_COLS = ("superseded_by",)
+
+
+def _v12_to_v13(con: sqlite3.Connection, home: NeurataHome) -> None:
+    """v12 → v13: contradição de verdade (design 2026-09-05).
+
+    `entries.superseded_by` abre espaço para a supersessão curatorial
+    (derivada do frontmatter na próxima re-escrita do grão — migração
+    NÃO inventa dado, e não lê disco: mesma regra da v9/v10). As tabelas
+    `assertions`/`contradictions` são criadas VAZIAS: são cache
+    re-derivável, e os writers (reindex full, tick incremental) as
+    enchem no ciclo normal. `doctor contradictions` aponta o índice de
+    afirmações vazio em vez de deixar a busca achar silenciosamente que
+    não há contradição nenhuma — o que seria "coluna nasce vazia" com
+    cara de feature.
+    """
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        existing = entries_columns(con)
+        for col in _V13_COLS:
+            if col not in existing:
+                con.execute(f"ALTER TABLE entries ADD COLUMN {col} TEXT")
+        con.execute("CREATE TABLE IF NOT EXISTS assertions("
+                    "entry_id TEXT NOT NULL, target TEXT NOT NULL,"
+                    "polarity TEXT NOT NULL CHECK(polarity IN ('pos','neg')),"
+                    "PRIMARY KEY(entry_id, target, polarity))")
+        con.execute("CREATE TABLE IF NOT EXISTS contradictions("
+                    "a_id TEXT NOT NULL, b_id TEXT NOT NULL,"
+                    "target TEXT NOT NULL,"
+                    "a_pol TEXT NOT NULL CHECK(a_pol IN ('pos','neg')),"
+                    "b_pol TEXT NOT NULL CHECK(b_pol IN ('pos','neg')),"
+                    "PRIMARY KEY(a_id, b_id, target))")
+        apply_entries_indexes(con)
+        con.execute("INSERT OR REPLACE INTO meta VALUES"
+                    " ('index_schema_version', '13')")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
 _MIGRATIONS = {
     7: _v7_to_v8, 8: _v8_to_v9, 9: _v9_to_v10, 10: _v10_to_v11,
-    11: _v11_to_v12,
+    11: _v11_to_v12, 12: _v12_to_v13,
 }
+
+
+# ── afirmações e contradições (v1.5) ────────────────────────────────
+
+def replace_assertions(con: sqlite3.Connection, entry_id: str,
+                       rows: "list[tuple[str, str, str]]") -> None:
+    """Substitui o bloco de afirmações de UM grão. Chamado pelo tick a
+    cada corpo novo; o reindex limpa a tabela inteira e repõe."""
+    con.execute("DELETE FROM assertions WHERE entry_id=?", (entry_id,))
+    con.execute("DELETE FROM contradictions WHERE a_id=? OR b_id=?",
+                (entry_id, entry_id))
+    con.executemany("INSERT OR IGNORE INTO assertions VALUES (?,?,?)", rows)
+
+
+def rebuild_contradictions(con: sqlite3.Connection) -> int:
+    """Recomputa a tabela `contradictions` inteira a partir de
+    `assertions` (caminho do reindex full). Par canônico: a_id < b_id —
+    a mesma contradição vista dos dois lados é UMA linha. Devolve o nº
+    de pares."""
+    con.execute("DELETE FROM contradictions")
+    by_target: dict[str, list[tuple[str, str]]] = {}
+    for entry_id, target, pol in con.execute(
+            "SELECT entry_id, target, polarity FROM assertions"):
+        by_target.setdefault(target, []).append((entry_id, pol))
+    pairs: list[tuple[str, str, str, str, str]] = []
+    for target, members in by_target.items():
+        pos = sorted(eid for eid, pol in members if pol == "pos")
+        neg = sorted(eid for eid, pol in members if pol == "neg")
+        for a in pos:
+            for b in neg:
+                if a == b:
+                    continue
+                lo, hi = (a, b) if a < b else (b, a)
+                lo_pol = "pos" if lo == a else "neg"
+                hi_pol = "neg" if lo == a else "pos"
+                pairs.append((lo, hi, target, lo_pol, hi_pol))
+    con.executemany("INSERT OR IGNORE INTO contradictions VALUES (?,?,?,?,?)",
+                    pairs)
+    return len(pairs)
+
+
+def entry_contradictions(con: sqlite3.Connection,
+                         entry_id: str) -> "set[tuple]":
+    """Pares canônicos de UM grão, no estado atual. Snapshot tirado ANTES
+    do `_index_delete` (que purga os pares junto com a entry) — é o que
+    distingue par restabelecido de par genuinamente novo no journal."""
+    return {(a, b, t, ap, bp) for a, b, t, ap, bp in con.execute(
+        "SELECT a_id, b_id, target, a_pol, b_pol FROM contradictions"
+        " WHERE a_id=? OR b_id=?", (entry_id, entry_id))}
+
+
+def open_contradictions(con: sqlite3.Connection) -> "list[dict]":
+    """Pares em aberto: OS DOIS lados ainda de pé (nenhum marcado
+    `superseded_by` — nem contra o oponente, nem contra terceiro). Par
+    cujo lado já foi substituído por qualquer um está resolvido de
+    fato: o vencedor do par é o substituidor ou já o cobre. A linha do
+    par fica na tabela — a detecção é história, a resolução é estado
+    do arquivo."""
+    rows = con.execute(
+        "SELECT c.a_id, c.b_id, c.target, c.a_pol, c.b_pol"
+        " FROM contradictions c"
+        " JOIN entries ea ON ea.id = c.a_id"
+        " JOIN entries eb ON eb.id = c.b_id"
+        " WHERE (ea.superseded_by IS NULL OR ea.superseded_by = '')"
+        "   AND (eb.superseded_by IS NULL OR eb.superseded_by = '')"
+        " ORDER BY c.target, c.a_id, c.b_id").fetchall()
+    return [{"a_id": a, "b_id": b, "target": t, "a_pol": ap, "b_pol": bp}
+            for a, b, t, ap, bp in rows]
 
 
 def load_shingle_sets(con: sqlite3.Connection) -> "dict[str, frozenset]":
@@ -793,6 +926,8 @@ def drop_schema(con: sqlite3.Connection) -> None:
     con.execute("DROP TABLE IF EXISTS grains")
     con.execute("DROP TABLE IF EXISTS edges")
     con.execute("DROP TABLE IF EXISTS entry_tags")
+    con.execute("DROP TABLE IF EXISTS assertions")
+    con.execute("DROP TABLE IF EXISTS contradictions")
     con.execute("DROP TABLE IF EXISTS entries")
     con.execute("DROP TABLE IF EXISTS meta")
     con.commit()

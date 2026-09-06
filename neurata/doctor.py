@@ -6,7 +6,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
-from neurata import archive, snapshot, usage
+from neurata import archive, indexdb, snapshot, usage
 from neurata import config as query_config
 from neurata.frontmatter import FrontmatterError
 from neurata.frontmatter import parse as parse_frontmatter
@@ -37,6 +37,7 @@ def run_checks(home: NeurataHome) -> list[Check]:
     checks.append(_index(home))
     checks.append(_index_schema(home))
     checks.append(_regime(home))
+    checks.append(_contradictions(home))
     checks.append(_freshness(home))
     checks.append(_skipped(home))
     checks.append(_lock(home))
@@ -150,6 +151,53 @@ def _regime(home: NeurataHome) -> Check:
             "rode `neurata reindex` (o índice é cache descartável)")
     return Check("regime", "ok",
                  f"mirror={n_mirror or 0} curated={n_curated or 0}")
+
+
+def _contradictions(home: NeurataHome) -> Check:
+    """Detecção de contradição construída? Pares em aberto? (v1.5)
+
+    Informa, nunca acusa: resolução é ato curatorial, não obrigação —
+    `ok` com contagem honesta. O único `warn` é o caso "coluna nasce
+    vazia" (decisão 12 do roadmap): índice migrado a v13 com `assertions`
+    vazio e curados no acervo significa que a detecção AINDA NÃO RODOU —
+    a busca responderia "zero contradições" por não ter procurado, que é
+    a mentira silenciosa que este check impede."""
+    if not home.index_path.exists():
+        return Check("contradictions", "ok",
+                     "index.db ausente (ver check index)")
+    # Tabelas de contradição nascem na v13. Num índice anterior a consulta
+    # estouraria OperationalError — alarme falso com diagnóstico errado
+    # (mesma defesa do `_derived_integrity`, que sai cedo em schema < 11).
+    schema = _meta(home, "index_schema_version")
+    if schema is not None and schema.isdigit() and int(schema) < 13:
+        return Check("contradictions", "ok",
+                     f"schema v{schema} anterior à contradição "
+                     "(ver check index-schema)")
+    con = sqlite3.connect(home.index_path)
+    try:
+        n_assertions = con.execute(
+            "SELECT COUNT(*) FROM assertions").fetchone()[0]
+        total = con.execute(
+            "SELECT COUNT(*) FROM contradictions").fetchone()[0]
+        abertos = indexdb.open_contradictions(con)
+        built = _meta(home, "assertions_built")
+    except sqlite3.DatabaseError as exc:
+        return Check("contradictions", "warn", f"índice ilegível ({exc})",
+                     "rode `neurata reindex`")
+    finally:
+        con.close()
+    # O marcador é do reindex (que reconstrói o conjunto INTEIRO), não do
+    # tick (cujo fill é incremental): distinguir "nenhuma afirmação existe"
+    # de "a varredura nunca aconteceu" não pode depender do corpus ter ou
+    # não frases normativas.
+    if not built:
+        return Check("contradictions", "warn",
+                     "detecção ainda não construída sobre o acervo atual",
+                     "rode `neurata reindex` para extrair as afirmações")
+    resolvidos = total - len(abertos)
+    return Check("contradictions", "ok",
+                 f"{len(abertos)} par(es) em aberto, {resolvidos} "
+                 f"resolvido(s), {n_assertions} afirmação(ões) indexadas")
 
 
 def _fts5(home: NeurataHome) -> Check:

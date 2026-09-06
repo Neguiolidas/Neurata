@@ -43,6 +43,7 @@ def query(home: NeurataHome, qstr: str, limit: int = 10) -> dict:
     # cairia em "query vazia", escondendo o erro que o usuário precisa ver.
     _validate_missing(parsed)
     _validate_class(parsed)
+    _validate_status(parsed)
     if not parsed.has_text and not parsed.has_facets:
         raise QueryError(
             "query vazia — passe texto e/ou facets (type:/tag:/env:/"
@@ -198,6 +199,25 @@ def _validate_class(parsed: router.ParsedQuery) -> None:
         f"válidas: {', '.join(indexdb.CLASSES)}")
 
 
+_STATUS_VALUES = ("superseded",)
+
+
+def _validate_status(parsed: router.ParsedQuery) -> None:
+    """`status:` é domínio fechado, como `class:` — mesma razão.
+
+    Hoje o único estado rastreado é `superseded` (marca curatorial do
+    arquivo, derivada para o índice). "Em contradição aberta" existe como
+    anotação no card, não como facet: é derivada da tabela `contradictions`
+    e de geração em geração pode mudar de critério — expor como facet
+    criaria contracto de busca sobre cache."""
+    valor = parsed.facets.get("status")
+    if valor is None or valor in _STATUS_VALUES:
+        return
+    raise QueryError(
+        f"status:{valor} não é um estado rastreado — "
+        f"válidos: {', '.join(_STATUS_VALUES)}")
+
+
 def _prefilter(parsed: router.ParsedQuery) -> "tuple[str | None, list]":
     clauses: list[str] = []
     params: list = []
@@ -206,6 +226,9 @@ def _prefilter(parsed: router.ParsedQuery) -> "tuple[str | None, list]":
         if key in parsed.facets:
             clauses.append(f"e.{key} = ?")
             params.append(parsed.facets[key])
+    if "status" in parsed.facets:
+        # valor já validado por _validate_status (domínio fechado)
+        clauses.append("e.superseded_by IS NOT NULL")
     for key in parsed.missing:
         clauses.append(_MISSING_CLAUSE[key])
     for tag in parsed.tags:
@@ -221,11 +244,41 @@ def _prefilter(parsed: router.ParsedQuery) -> "tuple[str | None, list]":
 def _facet_listing(con: sqlite3.Connection, pre_sql: str, pre_params: list,
                    limit: int) -> list[dict]:
     rows = con.execute(
-        "SELECT rowid, id, slug, title, description, type, path"  # nosec B608
+        "SELECT rowid, id, slug, title, description, type, path,"
+        " superseded_by"  # nosec B608
         f" FROM entries WHERE rowid IN ({pre_sql})"
         " ORDER BY updated DESC, rowid LIMIT ?",
         [*pre_params, limit]).fetchall()
-    return [_card(r, score=None, snippet=None, via="facet") for r in rows]
+    cards = [_card(r, score=None, snippet=None, via="facet") for r in rows]
+    # Demotion estável: superseded afunda sem quebrar a ordem SQL
+    # (updated DESC) dentro de cada grupo.
+    cards.sort(key=lambda c: c["superseded_by"] is not None)
+    _annotate(con, cards)
+    return cards
+
+
+def _contradiction_map(con: sqlite3.Connection) -> "dict[str, list[dict]]":
+    """{entry_id: [{id, target, polarity}, ...]} dos pares em aberto.
+
+    Só par aberto anota: grão substituído já perdeu a discussão — o card
+    dele carrega `superseded_by`, não a lista de oponentes."""
+    m: dict[str, list[dict]] = {}
+    for p in indexdb.open_contradictions(con):
+        m.setdefault(p["a_id"], []).append(
+            {"id": p["b_id"], "target": p["target"],
+             "polarity": p["a_pol"]})
+        m.setdefault(p["b_id"], []).append(
+            {"id": p["a_id"], "target": p["target"],
+             "polarity": p["b_pol"]})
+    return m
+
+
+def _annotate(con: sqlite3.Connection, cards: "list[dict]") -> None:
+    if not cards:
+        return
+    cmap = _contradiction_map(con)
+    for c in cards:
+        c["contradicts"] = cmap.get(c["id"], [])
 
 
 def _fanout(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
@@ -303,11 +356,16 @@ def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
                               {c["id"] for c in top}, rowid_of)
         top = top[:limit - len(extra)]
     _apply_shelf(con, home, cfg["shelf"], top + extra, rowid_of)
+    _annotate(con, top + extra)
     # Os dois segmentos ordenam separado: a cota é rodapé por decisão de
     # política, não por score. Um sort único jogaria o curado pro topo e
     # regrediria a cabeça do ranking (ver "As quatro medições" no plano).
-    top.sort(key=lambda c: (-c["score"], c["slug"]))
-    extra.sort(key=lambda c: (-c["score"], c["slug"]))
+    # Dentro de cada segmento, superseded afunda (demotion): o grão que
+    # já perdeu uma supersessão não lidera a busca — o vencedor sim.
+    top.sort(key=lambda c: (c["superseded_by"] is not None,
+                            -c["score"], c["slug"]))
+    extra.sort(key=lambda c: (c["superseded_by"] is not None,
+                              -c["score"], c["slug"]))
     return top + extra
 
 
@@ -394,7 +452,8 @@ def _fetch_entries(con: sqlite3.Connection, rowids: list[int]) -> list:
         return []
     marks = ",".join("?" * len(rowids))
     return con.execute(
-        "SELECT rowid, id, slug, title, description, type, path"  # nosec B608
+        "SELECT rowid, id, slug, title, description, type, path,"
+        " superseded_by"  # nosec B608
         f" FROM entries WHERE rowid IN ({marks})",
         sorted(rowids)).fetchall()
 
@@ -410,7 +469,8 @@ def _curados(con: sqlite3.Connection, rowids: list) -> set:
 
 
 def _card(row, score, snippet, via) -> dict:
-    _, eid, slug, title, description, etype, path = row
+    _, eid, slug, title, description, etype, path, superseded = row
     return {"id": eid, "slug": slug, "title": title,
             "description": description, "type": etype, "path": path,
+            "superseded_by": superseded,
             "score": score, "snippet": snippet, "via": via}

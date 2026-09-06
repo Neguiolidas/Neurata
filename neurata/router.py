@@ -11,7 +11,7 @@ from neurata.textnorm import normalize
 
 _FACET = re.compile(
     r"(?:^|(?<=\s))"
-    r"(type|tag|env|project|regime|class|agent|session|origin):(\S+)")
+    r"(type|tag|env|project|regime|class|agent|session|origin|status):(\S+)")
 _MISSING = re.compile(r"(?:^|(?<=\s))missing:(\S+)")
 _PHRASE = re.compile(r'"([^"]+)"')
 _SKILL = re.compile(r"\bcomo fa[çc]o\b|\bhow do i\b", re.IGNORECASE)
@@ -31,7 +31,7 @@ class ParsedQuery:
     text: str
     tokens: list[str]
     phrases: list[str]
-    facets: dict[str, str]  # type/env/project/regime/agent/session/origin
+    facets: dict[str, str]  # type/env/project/regime/agent/session/origin/status
     tags: list[str]
     skill_hint: bool
     # acrescentado no fim com default: a única construção é posicional

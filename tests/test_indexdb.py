@@ -158,13 +158,13 @@ def test_create_schema_has_source_key_column(tmp_path):
     assert "source_key" in column_names
 
 
-def test_index_schema_version_is_12():
-    """v12 = `shingles` deixa de ser JSON e vira blob de 8 B por shingle
-    (o envelope de texto inflava 2,5× a maior coluna de `entries`).
-    Literal de propósito: o número é contrato com índices no disco, então
-    subir a constante tem que quebrar um teste e forçar um passo de
-    migração."""
-    assert INDEX_SCHEMA_VERSION == 12
+def test_index_schema_version_is_13():
+    """v13 = contradição de verdade: `entries.superseded_by` + tabelas
+    `assertions`/`contradictions` (caches re-deriváveis das afirmações
+    normativas). Literal de propósito: o número é contrato com índices
+    no disco, então subir a constante tem que quebrar um teste e forçar
+    um passo de migração."""
+    assert INDEX_SCHEMA_VERSION == 13
 
 
 def test_create_schema_has_project_column(tmp_path):

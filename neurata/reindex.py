@@ -18,6 +18,7 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 
+from neurata import assertion
 from neurata.dedup import pack_shingles, shingle_hashes
 from neurata.frontmatter import FrontmatterError, parse
 from neurata.grains import make_card, make_summary
@@ -32,6 +33,7 @@ from neurata.indexdb import (
     fts_insert,
     project_of,
     provenance,
+    rebuild_contradictions,
     regime_of,
 )
 
@@ -65,6 +67,7 @@ def _reindex_locked(home: NeurataHome, con: sqlite3.Connection) -> dict:
     # tradução, aplicada só na fronteira do INSERT — o espelho do JOIN em
     # `linkgraph.load_adjacency`.
     id_of: dict[int, str] = {}
+    curated_bodies: list[tuple[str, str]] = []
     old_grains = _grains_snapshot(con)
     drop_schema(con)
     create_schema(con)
@@ -97,6 +100,8 @@ def _reindex_locked(home: NeurataHome, con: sqlite3.Connection) -> dict:
                              old_grains)
             indexed += 1
             id_of[rowid] = str(meta["id"])
+            if regime_of(meta) == "curated":
+                curated_bodies.append((str(meta["id"]), body))
             by_slug[slug] = rowid
             _map_put(by_title, str(meta.get("title", slug)).lower(),
                      rowid)
@@ -115,10 +120,25 @@ def _reindex_locked(home: NeurataHome, con: sqlite3.Connection) -> dict:
                     "INSERT OR IGNORE INTO edges VALUES (?,?)",
                     (id_of[src], id_of[dst]))
                 edges += cur.rowcount
+    # Afirmações normativas dos curados (v1.5): cache re-derivável, mesma
+    # natureza dos shingles — reindex full é o writer de massa; o tick
+    # mantém o incremento grão a grão. Espelho não participa (cache de
+    # upstream: contradição lá re-synca embora).
+    con.execute("DELETE FROM assertions")
+    arows: list[tuple[str, str, str]] = []
+    for eid, cbody in curated_bodies:
+        for a in assertion.extract(cbody):
+            arows.append((eid, a.target, a.polarity))
+    con.executemany("INSERT OR IGNORE INTO assertions VALUES (?,?,?)", arows)
+    contradictions = rebuild_contradictions(con)
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     con.execute(
         "INSERT OR REPLACE INTO meta VALUES ('last_reindex', ?)",
         (now,))
+    # Marcador da varredura de afirmações (mesmo com zero extraídas): o
+    # doctor distingue "acervo sem afirmações" de "detecção nunca rodou".
+    con.execute("INSERT OR REPLACE INTO meta VALUES "
+                "('assertions_built', '1')")
     con.execute("INSERT OR REPLACE INTO meta VALUES ('skipped', ?)",
                 (json.dumps(skipped),))
     con.execute("INSERT OR REPLACE INTO meta VALUES "
@@ -127,6 +147,7 @@ def _reindex_locked(home: NeurataHome, con: sqlite3.Connection) -> dict:
     con.commit()
     return {"indexed": indexed, "skipped": skipped, "edges": edges,
             "unresolved_links": unresolved, "ambiguous_links": ambiguous,
+            "contradictions": contradictions,
             "duration_ms": int((time.monotonic() - start) * 1000)}
 
 
@@ -205,12 +226,14 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
     # valor que `_write_grains` usaria como `body_hash`; computado uma vez
     # e reaproveitado, não duas implementações do mesmo hash.
     derived_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    superseded_by = meta.get("superseded_by")
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
         " grain_quality, shingles, source_key, regime, class,"
-        " agent, session, origin, source_path, derived_hash, derived_from)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " agent, session, origin, source_path, derived_hash, derived_from,"
+        " superseded_by)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
          title, description,
@@ -219,7 +242,8 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
                                                     meta.get("created", ""))),
          grain_quality, shingles_blob, meta.get("source_key"),
          regime_of(meta), class_of(meta), *provenance(meta),
-         meta.get("source_path"), derived_hash, meta.get("derived_from")))
+         meta.get("source_path"), derived_hash, meta.get("derived_from"),
+         str(superseded_by) if superseded_by else None))
     rowid = cur.lastrowid
     assert rowid is not None  # INSERT sempre popula lastrowid
     fts_insert(con, rowid, regime_of(meta), title=title, aliases=aliases_text,

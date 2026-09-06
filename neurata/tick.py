@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-from neurata import indexdb
+from neurata import assertion, indexdb
 from neurata.dedup import NEAR_DUP_JACCARD, jaccard, pack_shingles, shingle_hashes
 from neurata.frontmatter import FrontmatterError, parse, serialize
 from neurata.home import NeurataHome, relposix
@@ -58,6 +58,7 @@ class TickReport:
     stale: int = 0       # tombstone marcou entry como stale (§5)
     reconciled: int = 0  # órfãos write-then-log adotados via re-log (T2)
     absorbed: int = 0    # edição na mão em library/ absorvida (v1.2, §D8)
+    contradictions: int = 0  # pares de contradição novos (v1.5)
     errors: "list[ItemError]" = field(default_factory=list)
     duration_ms: int = 0
     snapshot: "str | None" = None  # sha do commit deste tick, ou None (v0.6)
@@ -220,7 +221,10 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
         return
 
     rel_dst = _relpath(home, dest)
+    anteriores = indexdb.entry_contradictions(con, str(meta["id"]))
     _index_insert(con, meta, body, rel_dst, "library", slug)
+    pairs = (_refresh_assertions(con, str(meta["id"]), body, anteriores)
+             if regime_of(meta) == "curated" else [])
     con.commit()
     shingle_sets[str(meta["id"])] = frozenset(shingles)
 
@@ -228,6 +232,7 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
                  rel_dst, report, content_hash=content_hash)
     if not ok:
         return
+    _journal_contradictions(home, tick_id, pairs, report)
     literate_ok = True
     if literate:
         literate_ok = _journal(home, tick_id, "literate", str(meta["id"]),
@@ -606,12 +611,16 @@ def _reconcile_renames(home: NeurataHome, con, tick_id: str,
         if con.execute(
                 "SELECT 1 FROM entries WHERE slug=?", (slug,)).fetchone():
             continue  # colisão de slug num órfão: deixa pro reindex full.
+        anteriores = indexdb.entry_contradictions(con, eid)
         _index_insert(con, meta, body, rel, "library", slug)
+        pairs = (_refresh_assertions(con, eid, body, anteriores)
+                 if regime_of(meta) == "curated" else [])
         con.commit()
         ok = _journal(home, tick_id, "catalog", eid, None, rel, report,
                      content_hash=chash)
         if not ok:
             continue
+        _journal_contradictions(home, tick_id, pairs, report)
         report.processed += 1
 
 
@@ -709,12 +718,15 @@ def _absorb_edits(home: NeurataHome, con, tick_id: str,
             report.errors.append(ItemError(rel, f"transiente (I/O): {exc}"))
             continue
 
+        anteriores = indexdb.entry_contradictions(con, str(eid))
         _index_delete(con, eid)
         _index_insert(con, merged, body, rel, "library", slug)
+        pairs = _refresh_assertions(con, str(eid), body, anteriores)
         con.commit()
         if _journal(home, tick_id, "absorb", str(eid), None, rel, report,
                     content_hash=body_hash):
             report.absorbed += 1
+        _journal_contradictions(home, tick_id, pairs, report)
 
 
 def _reconcile_journal_orphans(home: NeurataHome, con, tick_id: str,
@@ -782,6 +794,60 @@ def _reconcile_journal_orphans(home: NeurataHome, con, tick_id: str,
                        mark_error=True, item_id=eid)
 
 
+# ── afirmações/contradições (v1.5) ──────────────────────────────────
+
+def _refresh_assertions(con, entry_id: str, body: str,
+                        anteriores: "set[tuple]") -> "list[tuple]":
+    """Substitui o bloco de afirmações do grão curado e registra os pares
+    de contradição. Devolve APENAS os pares genuinamente novos
+    (opponent_id, target, polaridade) para o chamador journalar DEPOIS do
+    commit — a ordem crash-safe é índice → commit → journal, como em todo
+    o tick. Par que já existia é restaurado em silêncio: um absorb que
+    re-deriva o mesmo par não é história nova.
+
+    `anteriores` é o snapshot dos pares do grão tirado ANTES do
+    `_index_delete` (que os purga junto com a entry) — `indexdb.
+    entry_contradictions`. Sem ele, todo re-catalogo re-journalaria os
+    mesmos pares.
+
+    Só grão curado chega aqui (espelho é cache de upstream; contradição
+    lá re-synca embora). Pares canônicos: a_id < b_id. A linha do grão é
+    substituída junto com as afirmações — corpo que muda de polaridade
+    apaga o par antigo, que volta (novamente novo) só se a contradição
+    existir de fato."""
+    novas = assertion.extract(body)
+    indexdb.replace_assertions(
+        con, entry_id, [(entry_id, a.target, a.polarity) for a in novas])
+    known: dict = {}
+    for eid, target, pol in con.execute(
+            "SELECT entry_id, target, polarity FROM assertions"):
+        if eid != entry_id:
+            known.setdefault(target, []).append((eid, pol))
+    pairs: list[tuple] = []
+    for opponent_id, target, pol in assertion.find_pairs(novas, known):
+        a_id, b_id = ((entry_id, opponent_id) if entry_id < opponent_id
+                      else (opponent_id, entry_id))
+        a_pol = pol if a_id == entry_id else ("neg" if pol == "pos"
+                                              else "pos")
+        b_pol = "neg" if a_pol == "pos" else "pos"
+        chave = (a_id, b_id, target, a_pol, b_pol)
+        con.execute("INSERT OR IGNORE INTO contradictions"
+                    " VALUES (?,?,?,?,?)", chave)
+        if chave not in anteriores:
+            pairs.append((opponent_id, target, pol))
+    return pairs
+
+
+def _journal_contradictions(home: NeurataHome, tick_id: str,
+                            pairs: "list[tuple]", report: TickReport) -> None:
+    for opponent_id, target, pol in pairs:
+        ok = _journal(home, tick_id, "contradiction", None, None, None,
+                      report, opponent=opponent_id, target=target,
+                      polarity=pol)
+        if ok:
+            report.contradictions += 1
+
+
 # ── índice incremental (subset de reindex._insert, sem grains/links) ─
 
 def _index_insert(con, meta: dict, body: str, rel: str, location: str,
@@ -811,12 +877,14 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
     # agora), distinto de `content_hash` (hash da fonte, nunca tocado pela
     # compactação — design v1.4 §2/D-1).
     derived_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
+    superseded_by = meta.get("superseded_by")
     cur = con.execute(
         "INSERT INTO entries(id, slug, path, location, type, env, title,"
         " description, project, content_hash, created, updated,"
         " grain_quality, shingles, source_key, regime, class,"
-        " agent, session, origin, source_path, derived_hash, derived_from)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " agent, session, origin, source_path, derived_hash, derived_from,"
+        " superseded_by)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (str(meta["id"]), slug, rel, location,
          str(meta.get("type", "note")), str(meta.get("env", "generic")),
          title, description,
@@ -827,7 +895,8 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
          str(source_key) if source_key else None,
          regime_of(meta), class_of(meta), *provenance(meta),
          str(source_path) if source_path else None, derived_hash,
-         str(derived_from) if derived_from else None))
+         str(derived_from) if derived_from else None,
+         str(superseded_by) if superseded_by else None))
     rowid = cur.lastrowid
     assert rowid is not None
     fts_insert(con, rowid, regime_of(meta), title=title, aliases=aliases_text,

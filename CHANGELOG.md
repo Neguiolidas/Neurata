@@ -6,6 +6,67 @@ v0.4–v0.7 shipped under the 0.8.0 release. None of the 0.x versions was
 ever tagged or uploaded anywhere — they are development history, kept
 for the record. For anyone installing the package, 1.0.0 is the history.
 
+## [1.5.0] - 2026-09-05
+
+"Use X" and "never use X" share almost no text, so the near-duplicate
+detector (Jaccard over shingles) could never see them — what it marked
+were duplicates, not conflicts, and nothing consumed the marks anyway:
+the query did not reorder, group or warn. 1.5 makes contradiction real,
+deterministically — same assertion target, opposite polarity — and
+gives it a resolution path and a consumer. No LLM: this band stays
+mechanical.
+
+### Added
+- **Assertion extraction** (`neurata/assertion.py`): imperative
+  normative statements become `(target, polarity)` pairs — "use X" →
+  `(X, pos)`, "nunca use X" → `(X, neg)`, "evite Y" → `(Y, neg)`. The
+  negation flips polarity and never the target, which is what makes
+  the roadmap's canonical pair matchable. Deterministic: same body,
+  same assertions, every machine. Deprecation-style statements ("X was
+  deprecated") are out — they need reference resolution, and that is
+  judgment (v2.2).
+- **Index schema v13** (migrated in place, additive):
+  `entries.superseded_by` plus two re-derivable caches, `assertions`
+  and `contradictions`. The migration reads no files (same rule as
+  v9/v10); `reindex` fills the caches in bulk and stamps an
+  `assertions_built` marker, `tick` maintains them grain-by-grain as
+  curated grains are catalogued, absorbed or edited. `doctor`
+  `contradictions` warns while that first full sweep has not happened —
+  the search must never answer "zero conflicts" because it never
+  looked.
+- **Detection at curate time**: a curated grain that asserts the
+  opposite polarity over a target already asserted by another grain
+  produces a contradiction pair (canonical `a_id < b_id`), journaled
+  with the new `contradiction` verb. Mirrors do not participate — their
+  truth re-syncs from upstream. A body that changes its polarity
+  retires its old pairs; `entry_purge` cleans up both sides.
+- **Resolution by supersession**: the loser's file gains
+  `superseded_by: <winner-id>` — additive, reversible, journaled with
+  the new `supersede` verb; the index derives it, the same pact as
+  `derived_from`. Explicit per pair (`neurata supersede <ref> --by
+  <ref>`) or in batch under a fully deterministic winner rule
+  (`neurata contradictions --resolve`): episodic loses to
+  semantic/procedural, then newer `updated`, then complete provenance
+  (`agent` and `session` — the reason those columns exist since v1.1c),
+  then newer `created`, then the smaller id.
+- **Search consumes it**: cards now carry `superseded_by` and
+  `contradicts` (open opponents with target and polarity); superseded
+  grains sink to the bottom of their segment; `status:superseded` is a
+  new facet (closed domain — anything else is a usage error). Human
+  output annotates lines with `⚠ contradiz N` / `↺ substituído por …`.
+  The CLI contract version moves 4 → 5 for the added fields and verbs.
+
+### Known limitations
+- **Detection is imperative-only and target-exact.** "Prefer X over Y",
+  "X is deprecated" and reworded targets ("postgres" vs "postgres 15")
+  do not pair in this release. What is caught is annotated, never
+  mutated — a false positive costs a line in the journal and a mark you
+  can see, not a change to the file.
+- **Batch resolve writes what the rule decides.** `--resolve` is
+  opt-in and journaled precisely because the rule is a policy, not a
+  judgment call: check the report first, and remove a
+  `superseded_by` mark (then `reindex`) to undo.
+
 ## [1.4.1] - 2026-09-05
 
 A full audit of the codebase (entire package read, suite, ruff, pyright,
