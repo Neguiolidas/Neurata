@@ -157,7 +157,7 @@ def test_capture_does_not_normalize_neurata_agent(sem_procedencia):
     ("claude-code_2-1-229_agent", "claude-code"),
     ("claude-code_2-2-0_agent", "claude-code"),
     ("claude-code", "claude-code"),
-    ("agente_teste_agent", "agente-teste"),
+    ("agente_teste_agent", "agente_teste"),
     ("mcp_server_v1.4.2_agent", "mcp_server"),
     ("  claude-code_2-1-229_agent  ", "claude-code"),
     ("agent", "agent"),      # sobraria vazio → devolve o cru

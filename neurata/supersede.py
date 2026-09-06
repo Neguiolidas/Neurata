@@ -22,8 +22,13 @@ from datetime import datetime, timezone
 from neurata.entryref import resolve
 from neurata.frontmatter import serialize
 from neurata.home import NeurataHome, atomic_write_text, relposix
-from neurata.indexdb import (LockHeldError, check_schema, connect,
-                             migrate_if_needed, open_contradictions)
+from neurata.indexdb import (
+    LockHeldError,
+    check_schema,
+    connect,
+    migrate_if_needed,
+    open_contradictions,
+)
 from neurata.reindex import reindex
 from neurata.ulid import new_ulid
 
