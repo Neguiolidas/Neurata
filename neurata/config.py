@@ -19,6 +19,11 @@ DEFAULTS: dict = {
               "beta": 0.15},
     "regime": {"curated_quota": 3},
     "snapshot": {"remote": None, "auto_push": False},
+    # Viés determinístico por contexto (v1.6): multiplicadores de
+    # projeto/sessão no pool fundido e pista de recência pré-corte.
+    # Zero em qualquer valor desliga aquela pista limpa.
+    "context": {"project_boost": 1.25, "session_boost": 1.5,
+                "recency_weight": 0.1, "recency_tau_dias": 30.0},
 }
 # schema_version pertence ao config desde a fase 1 (home.init escreve).
 _TOP_KEYS = set(DEFAULTS) | {"schema_version"}

@@ -5,10 +5,11 @@ import re
 from pathlib import Path
 
 SCHEMA_VERSION = 1
-# v1.5: cards de query ganham `superseded_by`/`contradicts`; journal ganha
-# os verbos `contradiction` e `supersede`; CLI ganha `supersede` e
-# `contradictions`. Tudo aditivo — consumidores antigos seguem parseando.
-CONTRACT_VERSION = 5
+# v1.6: resultado de query ganha o bloco `context` (project/session/
+# source do chamador) — viés determinístico declarado, não escondido.
+# Aditivo; o card não muda. bump anterior: v1.5 (superseded_by/
+# contradicts nos cards, verbos contradiction/supersede).
+CONTRACT_VERSION = 6
 
 _DIRS = ("library", "inbox", "archive", "quarantine", "logs")
 

@@ -91,6 +91,35 @@ neurata doctor
 neurata --version
 ```
 
+## Context bias (deterministic)
+
+The search knows where you are — the same way the deposit does since
+v1.2. Grains from your current project, your current session, and
+recently touched grains get a modest, fully deterministic boost before
+the result is cut; no LLM, no embedding, no service.
+
+```bash
+neurata query "deploy"          # project from git root of the cwd
+NEURATA_PROJECT=myrepo neurata query "deploy"   # explicit, zero cost
+NEURATA_SESSION=$ID neurata query "deploy"      # session affinity
+```
+
+- `NEURATA_PROJECT` wins over the git probe (agents should set it);
+  the git probe has a 0.5 s timeout and failure means "no bias", never
+  an error.
+- An explicit facet mutes its bias: `project:X` disables the project
+  boost for that query — the facet is sovereign.
+- Every JSON answer declares what it used: `"context": {"project",
+  "session", "source"}` — a bias you cannot see is a bias you cannot
+  trust. `source` is `env`, `git`, `none`, or `disabled` (bias switched
+  off in config, so nothing was even looked at).
+- All three knobs live in `config.json` under `"context"`
+  (`project_boost`, `session_boost`, `recency_weight`,
+  `recency_tau_dias`); zeroing one switches that hint off cleanly.
+- The pre-cut recency hint and the shelf's recency are two different
+  layers: the hint decides who *enters* the top-k, the shelf reorders
+  *inside* it.
+
 ## Automatic curation
 
 `tick` catalogues whatever is in the inbox. Run it hourly via cron:

@@ -339,7 +339,7 @@ def test_doctor_alerta_deteccao_nao_construida(tmp_path):
     checks = {c.name: c for c in run_checks(home)}
     assert checks["contradictions"].status == "ok"
     # e o contrato segue coerente com a constante importada
-    assert CONTRACT_VERSION == 5
+    assert CONTRACT_VERSION == 6
 
 
 def test_absorb_que_rederiva_mesmo_par_nao_reloga(tmp_path):

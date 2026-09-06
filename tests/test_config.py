@@ -122,3 +122,49 @@ def test_regime_quota_default_e_validada(tmp_path):
     home.config_path.write_text(json.dumps({"regime": {"cota": 3}}))
     with pytest.raises(ConfigError, match="desconhecida"):
         load(home)
+
+
+# ── v1.6: subtree context (viés determinístico) ──────────────────────
+
+def test_context_defaults(tmp_path):
+    home = _home(tmp_path)
+    cfg = load(home)
+    assert cfg["context"] == {"project_boost": 1.25, "session_boost": 1.5,
+                              "recency_weight": 0.1,
+                              "recency_tau_dias": 30.0}
+
+
+def test_context_override_funde(tmp_path):
+    home = _home(tmp_path)
+    home.config_path.write_text('{"context": {"project_boost": 2.0}}',
+                                encoding="utf-8")
+    cfg = load(home)
+    assert cfg["context"]["project_boost"] == 2.0
+    assert cfg["context"]["session_boost"] == 1.5  # default preservado
+
+
+def test_context_chave_desconhecida_erro(tmp_path):
+    home = _home(tmp_path)
+    home.config_path.write_text('{"context": {"projeto": 1.0}}',
+                                encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load(home)
+
+
+def test_context_nao_numerico_erro(tmp_path):
+    home = _home(tmp_path)
+    home.config_path.write_text('{"context": {"project_boost": "alto"}}',
+                                encoding="utf-8")
+    with pytest.raises(ConfigError):
+        load(home)
+
+
+def test_context_zero_desliga_limpo(tmp_path):
+    home = _home(tmp_path)
+    home.config_path.write_text(
+        '{"context": {"project_boost": 0, "session_boost": 0,'
+        ' "recency_weight": 0}}', encoding="utf-8")
+    cfg = load(home)
+    assert cfg["context"]["project_boost"] == 0
+    assert cfg["context"]["session_boost"] == 0
+    assert cfg["context"]["recency_weight"] == 0

@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from neurata.context import QueryContext
 from neurata.home import NeurataHome
 from neurata.query import query
 from neurata.reindex import reindex
@@ -86,9 +87,23 @@ def main() -> None:
         p50 = statistics.median(times_ms)
         p95 = statistics.quantiles(times_ms, n=20)[18]
 
+        # v1.6: contexto real incluído — captura com subprocess de git
+        # (o corpus está num tmp FORA de qualquer repo, então o caminho
+        # git falha rápido; com NEURATA_PROJECT setado é custo zero).
+        ctx_times_ms = []
+        for q in queries:
+            t0 = time.perf_counter()
+            query(home, q, context=QueryContext(
+                project="projeto-bench", session=None,
+                project_source="env"))
+            ctx_times_ms.append((time.perf_counter() - t0) * 1000)
+
+        c50 = statistics.median(ctx_times_ms)
+        c95 = statistics.quantiles(ctx_times_ms, n=20)[18]
+
         print(f"corpus: {N_NOTES} notas, {len(queries)} queries")
-        print(f"p50: {p50:.2f} ms")
-        print(f"p95: {p95:.2f} ms")
+        print(f"p50: {p50:.2f} ms | com contexto: {c50:.2f} ms")
+        print(f"p95: {p95:.2f} ms | com contexto: {c95:.2f} ms")
         print(f"máquina: {platform.platform()}, "
               f"python {platform.python_version()}, "
               f"cpu_count={__import__('os').cpu_count()}")

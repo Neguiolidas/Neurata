@@ -6,6 +6,58 @@ v0.4–v0.7 shipped under the 0.8.0 release. None of the 0.x versions was
 ever tagged or uploaded anywhere — they are development history, kept
 for the record. For anyone installing the package, 1.0.0 is the history.
 
+## [1.6.0] - 2026-09-06
+
+Since 1.2 the deposit knows where it is — the cwd, the git root, the
+agent and the session behind it. The search answered the same from
+anywhere. 1.6 closes that gap with a deterministic context bias: grains
+from your current project, your current session, and grains touched
+recently get a modest boost before the result is cut. No LLM, no
+embedding, no service — and the answer declares which context it used.
+
+This release is also the package for everything fixed since 1.5.0
+(one update, not a trail of patches).
+
+### Added
+- **Query context capture** (`neurata/context.py`): the project comes
+  from `NEURATA_PROJECT` (zero cost — the contract for agents) or from
+  the git root of the cwd (0.5 s timeout, best-effort: failure means
+  "no bias", never an error); the session uses the same environment
+  precedence as the deposit (`NEURATA_SESSION` >
+  `CLAUDE_CODE_SESSION_ID`). The project basename is normalized
+  exactly like `project_of` on the deposit side — the two ends must
+  agree on what a repo is called, or the boost never matches.
+- **Three hints, one cut**: project boost (×1.25 default) and session
+  affinity (×1.5) multiply the fused pool score; a pre-cut recency
+  hint (`+w·exp(-Δdias/tau)`, defaults 0.1/30) is added last, so a
+  recently touched grain can *enter* the top-k — the shelf only
+  reorders inside it. Explicit facets are sovereign: `project:X` or
+  `session:X` in the query mutes the matching boost. Superseded grains
+  stay sunk: demotion is positional and runs last.
+- **The bias is declared, not hidden**: every query answer carries
+  `"context": {"project", "session", "source"}`, where source is
+  `env`, `git`, `none` — or `disabled` when the bias is switched off
+  in config and nothing was even looked at (capture is lazy; a user
+  with the hints at zero pays no git-subprocess cost per query).
+- **Config**: all knobs under `"context"` in `config.json`
+  (`project_boost`, `session_boost`, `recency_weight`,
+  `recency_tau_dias`), validated like every other numeric subtree;
+  zeroing one disables that hint cleanly.
+
+### Changed
+- Query contract 5 → 6: the result envelope gains the `context` block.
+  Additive — cards are unchanged, older consumers keep parsing.
+
+### Fixed
+- `neurata contradictions` and `contradictions --resolve` migrate the
+  index in line, like `query`, `tick` and `harvest` already did. On a
+  pre-v1.5 index they died with a raw `no such table` — a stale index
+  reported as a corrupt one.
+- The release workflow's publish step is idempotent (`skip-existing`):
+  re-running a tag whose version is already on PyPI no longer dies at
+  upload after test/guard/build/smoke already proved the artifact.
+  PyPI versions are immutable; re-uploading can never succeed.
+
 ## [1.5.0] - 2026-09-05
 
 "Use X" and "never use X" share almost no text, so the near-duplicate

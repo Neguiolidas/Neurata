@@ -1,7 +1,8 @@
 """neurata/query.py — orquestrador do pipeline de busca.
 
 parse facets → prefiltro (subquery rowid) → fan-out ≤6 MATCH → RRF
-→ união com vizinhos 1-hop → PPR aditivo → boost skill → cards.
+→ união com vizinhos 1-hop → PPR aditivo → boost skill → viés de
+contexto → cards.
 
 Invariante de SQL (justifica os `# nosec B608` espalhados aqui): todo
 valor vindo do usuário viaja em parâmetro `?`. O que é interpolado em
@@ -10,6 +11,7 @@ literalmente `",".join("?" * n)`; `pre_sql`, montado em `_prefilter`
 só com cláusulas literais; e constantes de módulo (`_SNIP_*`, int).
 Ao mexer nestas queries, manter a invariante ou remover o `nosec`.
 """
+import math
 import sqlite3
 
 from neurata import (
@@ -22,6 +24,7 @@ from neurata import (
     shelf,
     usage,
 )
+from neurata.context import QueryContext, capture_query_context, days_since
 from neurata.home import NeurataHome
 from neurata.indexdb import connect
 
@@ -36,7 +39,8 @@ class QueryError(ValueError):
     pass
 
 
-def query(home: NeurataHome, qstr: str, limit: int = 10) -> dict:
+def query(home: NeurataHome, qstr: str, limit: int = 10,
+          context: "QueryContext | None" = None) -> dict:
     cfg = config.load(home)
     parsed = router.parse(qstr)
     # antes do check de vazia: `missing:xpto` sozinho tem has_facets e
@@ -53,18 +57,51 @@ def query(home: NeurataHome, qstr: str, limit: int = 10) -> dict:
     try:
         _migrate(con, home)
         _check_schema(con)
+        ctx = context
+        if ctx is None:
+            ctx = _capture_if_worth(con, cfg)
         pre_sql, pre_params = _prefilter(parsed)
         if not parsed.has_text:
             assert pre_sql is not None  # has_facets garante clauses não-vazias
             results = _facet_listing(con, pre_sql, pre_params, limit)
         else:
             results = _search(con, cfg, parsed, pre_sql, pre_params,
-                              limit, home)
+                              limit, home, ctx)
     finally:
         con.close()
     for rank, card in enumerate(results, start=1):
         usage.log_event(home, "query", card["id"], query=qstr, rank=rank)
-    return {"results": results}
+    return {"results": results,
+            "context": {"project": ctx.project, "session": ctx.session,
+                        "source": ctx.project_source}}
+
+
+def _capture_if_worth(con: sqlite3.Connection,
+                      cfg: dict) -> QueryContext:
+    """Captura de contexto LAZY, em duas portas (v1.6):
+
+    1. viés zerado na config → nada a aplicar, `source: "disabled"` —
+       quem desligou a pista não paga subprocess nenhum;
+    2. acervo SEM nenhum grão com `project`/`session` indexados → o
+       boost não teria com o que casar: capturar (subprocess de git)
+       seria custo puro. `source: "none"` — não há contexto USÁVEL.
+
+    A consulta de existência é barata e roda dentro da conexão já
+    aberta; o subprocess de git só acontece quando há sinal no acervo
+    E pistas ligadas na config."""
+    pesos = cfg["context"]
+    if not (pesos["project_boost"] or pesos["session_boost"]
+            or pesos["recency_weight"]):
+        return QueryContext(project=None, session=None,
+                            project_source="disabled")
+    tem_contexto = con.execute(
+        "SELECT EXISTS(SELECT 1 FROM entries WHERE project IS NOT NULL)"
+        " OR EXISTS(SELECT 1 FROM entries WHERE session IS NOT NULL)"
+    ).fetchone()[0]
+    if not tem_contexto:
+        return QueryContext(project=None, session=None,
+                            project_source="none")
+    return capture_query_context()
 
 
 def _has_indexable_content(home: NeurataHome) -> bool:
@@ -313,7 +350,8 @@ def _fanout(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
 
 def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
             pre_sql: "str | None", pre_params: list,
-            limit: int, home: NeurataHome) -> list[dict]:
+            limit: int, home: NeurataHome,
+            context: "QueryContext | None") -> list[dict]:
     snippets: dict[int, str] = {}
     ranked = _fanout(con, cfg, parsed, "entries_fts", pre_sql, pre_params,
                      _TOPN, snippets)
@@ -335,14 +373,19 @@ def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
                                 + cfg["w_ppr"] * pr.get(r, 0.0) / mx)
                     via.setdefault(r, "graph")
     boost = cfg["skill_boost"] if parsed.skill_hint else None
+    rows = {r[0]: r for r in _fetch_entries(con, list(final))}
+    for rowid, row in rows.items():
+        if boost and row[5] == "skill":
+            final[rowid] = final.get(rowid, 0.0) * boost
+    # Viés determinístico por contexto (v1.6): age NO POOL, antes do
+    # corte — é o ponto em que a shelf não consegue agir (ela só
+    # reordena dentro do top-K). Multiplicadores de projeto/sessão,
+    # recência somada por último (design v1.6 §3).
+    _apply_context(final, rows, cfg["context"], context, parsed)
     cards = []
     rowid_of: dict[str, int] = {}
-    for row in _fetch_entries(con, list(final)):
-        rowid = row[0]
-        score = final[rowid]
-        if boost and row[5] == "skill":
-            score *= boost
-        card = _card(row, score=round(score, 6),
+    for rowid, row in rows.items():
+        card = _card(row, score=round(final[rowid], 6),
                     snippet=snippets.get(rowid), via=via[rowid])
         rowid_of[card["id"]] = rowid
         cards.append(card)
@@ -367,6 +410,51 @@ def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
     extra.sort(key=lambda c: (c["superseded_by"] is not None,
                               -c["score"], c["slug"]))
     return top + extra
+
+
+def _apply_context(final: "dict[int, float]",
+                   rows: "dict[int, tuple]",
+                   cfg_ctx: dict, context: "QueryContext | None",
+                   parsed: router.ParsedQuery) -> None:
+    """Viés determinístico por contexto (v1.6) — in-place sobre `final`.
+
+    Chamada NO POOL, antes do corte do top-K: é onde a shelf não chega
+    (ela reordena dentro do corte). Ordem declarada no design (§3):
+    multiplicadores de projeto/sessão primeiro, recência somada por
+    último — a recência não é amplificada pelos multiplicadores.
+
+    Soberania da faceta: `project:`/`session:` explícitos desligam o
+    viés correspondente (todos os resultados já casam; boost viraria
+    distorção grátis) — mesma régua da cota curada com `regime:`.
+    Recência não tem faceta: sempre ativa (config 0 desliga).
+    """
+    if context is None:
+        return
+    w_proj = cfg_ctx["project_boost"]
+    w_sess = cfg_ctx["session_boost"]
+    w_rec = cfg_ctx["recency_weight"]
+    tau = cfg_ctx["recency_tau_dias"]
+    if not (w_proj or w_sess or w_rec):
+        return
+    boost_proj = (w_proj and context.project
+                  and "project" not in parsed.facets)
+    boost_sess = (w_sess and context.session
+                  and "session" not in parsed.facets)
+    for rowid, row in rows.items():
+        score = final.get(rowid)
+        if score is None:
+            continue
+        projeto, sessao, updated = row[8], row[9], row[10]
+        if boost_proj and projeto == context.project:
+            score *= w_proj
+        if boost_sess and sessao == context.session:
+            score *= w_sess
+        if w_rec:
+            delta = days_since(updated)
+            if delta != float("inf"):
+                # tau<=0 zera a pista (mesma régua da shelf), não estoura
+                score += w_rec * (math.exp(-delta / tau) if tau > 0 else 0.0)
+        final[rowid] = score
 
 
 def _quota(parsed: router.ParsedQuery, cfg: dict, limit: int) -> int:
@@ -453,7 +541,7 @@ def _fetch_entries(con: sqlite3.Connection, rowids: list[int]) -> list:
     marks = ",".join("?" * len(rowids))
     return con.execute(
         "SELECT rowid, id, slug, title, description, type, path,"
-        " superseded_by"  # nosec B608
+        " superseded_by, project, session, updated"  # nosec B608
         f" FROM entries WHERE rowid IN ({marks})",
         sorted(rowids)).fetchall()
 
@@ -469,7 +557,7 @@ def _curados(con: sqlite3.Connection, rowids: list) -> set:
 
 
 def _card(row, score, snippet, via) -> dict:
-    _, eid, slug, title, description, etype, path, superseded = row
+    _, eid, slug, title, description, etype, path, superseded = row[:8]
     return {"id": eid, "slug": slug, "title": title,
             "description": description, "type": etype, "path": path,
             "superseded_by": superseded,
