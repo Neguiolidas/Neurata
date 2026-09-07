@@ -105,7 +105,7 @@ def test_commit_skips_when_tree_clean(tmp_path):
 def test_commit_returns_sha_prefix(tmp_path):
     home = _home(tmp_path)
     ensure_repo(home)
-    (home.library / "nota.md").write_text("conteudo\n")
+    (home.library / "nota.md").write_text("conteudo\n", encoding="utf-8")
     sha = commit(home, "feat: primeira nota")
     assert sha is not None
     assert len(sha) >= 12
@@ -117,7 +117,7 @@ def test_commit_poda_a_trilha_com_gc_auto(tmp_path, monkeypatch):
     do que a compactação economiza. `--auto` porque o limiar é do git."""
     home = _home(tmp_path)
     ensure_repo(home)
-    (home.library / "nota.md").write_text("conteudo\n")
+    (home.library / "nota.md").write_text("conteudo\n", encoding="utf-8")
 
     chamadas = []
     original = snapshot._run
@@ -140,7 +140,7 @@ def test_commit_sobrevive_a_falha_do_gc(tmp_path, monkeypatch):
     retorno nem propagar erro (é `_run` sem check — best-effort de fato)."""
     home = _home(tmp_path)
     ensure_repo(home)
-    (home.library / "nota.md").write_text("conteudo\n")
+    (home.library / "nota.md").write_text("conteudo\n", encoding="utf-8")
 
     original = subprocess.run
 
@@ -162,12 +162,13 @@ def test_commit_sobrevive_a_falha_do_gc(tmp_path, monkeypatch):
 
 def test_commit_does_not_inherit_global_identity(tmp_path, tmp_path_factory, monkeypatch):
     global_cfg = tmp_path_factory.mktemp("hostcfg") / "gitconfig"
-    global_cfg.write_text("[user]\n\tname = Host User\n\temail = host@example.com\n")
+    global_cfg.write_text("[user]\n\tname = Host User\n\temail = host@example.com\n",
+                          encoding="utf-8")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(global_cfg))
 
     home = _home(tmp_path)
     ensure_repo(home)
-    (home.library / "nota.md").write_text("conteudo\n")
+    (home.library / "nota.md").write_text("conteudo\n", encoding="utf-8")
     commit(home, "feat: identidade isolada")
 
     author = subprocess.run(
@@ -290,7 +291,7 @@ def test_commit_tick_without_git_returns_none(tmp_path, monkeypatch):
 def test_commit_tick_creates_commit_with_subject_and_body(tmp_path):
     home = _home(tmp_path)
     ensure_repo(home)
-    (home.library / "nota.md").write_text("conteudo\n")
+    (home.library / "nota.md").write_text("conteudo\n", encoding="utf-8")
     report = TickReport(tick="01JTICK0000000000000000000", processed=1,
                         literate=1)
 
@@ -308,7 +309,7 @@ def test_commit_tick_creates_commit_with_subject_and_body(tmp_path):
 def test_commit_tick_zero_report_but_dirty_tree_uses_metadata_fallback(tmp_path):
     home = _home(tmp_path)
     ensure_repo(home)
-    (home.library / "nota.md").write_text("conteudo\n")
+    (home.library / "nota.md").write_text("conteudo\n", encoding="utf-8")
     report = TickReport(tick="01JTICK0000000000000000000")  # todo-zero
 
     sha = commit_tick(home, report)
@@ -323,7 +324,7 @@ def test_commit_tick_zero_report_but_dirty_tree_uses_metadata_fallback(tmp_path)
 def test_commit_tick_idempotent_second_call_without_changes_is_none(tmp_path):
     home = _home(tmp_path)
     ensure_repo(home)
-    (home.library / "nota.md").write_text("conteudo\n")
+    (home.library / "nota.md").write_text("conteudo\n", encoding="utf-8")
     report = TickReport(tick="01JTICK0000000000000000000", processed=1)
     first = commit_tick(home, report)
     assert first is not None
@@ -334,7 +335,7 @@ def test_commit_tick_idempotent_second_call_without_changes_is_none(tmp_path):
 
 def _note(home, name, nid, title, body):
     (home.library / f"{name}.md").write_text(
-        f"---\nid: {nid}\ntitle: {title}\n---\n{body}\n")
+        f"---\nid: {nid}\ntitle: {title}\n---\n{body}\n", encoding="utf-8")
 
 
 def _head(home):
@@ -383,7 +384,8 @@ def test_restore_autosaves_dirty_tree_before_materializing(tmp_path):
     _note(home, "a", "01A", "A", "conteudo original")
     ref1 = commit(home, "feat: a")
     (home.library / "a.md").write_text(
-        "---\nid: 01A\ntitle: A\n---\nconteudo sujo alterado\n")
+        "---\nid: 01A\ntitle: A\n---\nconteudo sujo alterado\n",
+        encoding="utf-8")
 
     result = restore(home, ref1)
 
@@ -395,7 +397,7 @@ def test_restore_autosaves_dirty_tree_before_materializing(tmp_path):
          f"{result['autosaved']}:a.md"],
         capture_output=True, text=True, check=True).stdout
     assert "conteudo sujo alterado" in dirty_blob
-    assert (home.library / "a.md").read_text() == (
+    assert (home.library / "a.md").read_text(encoding="utf-8") == (
         "---\nid: 01A\ntitle: A\n---\nconteudo original\n")
 
 
@@ -414,7 +416,7 @@ def test_restore_materializes_ref_tree_exactly_add_and_delete(tmp_path):
 
     assert result["ok"] is True
     assert not (home.library / "add-pos-ref.md").exists()
-    assert (home.library / "del-pos-ref.md").read_text() == (
+    assert (home.library / "del-pos-ref.md").read_text(encoding="utf-8") == (
         "---\nid: 01D\ntitle: Del\n---\nvolta\n")
     assert (home.library / "manter.md").exists()
     tracked = _tracked(home)
@@ -497,7 +499,7 @@ def test_restore_reindex_failure_returns_ok_false_without_raising(
     assert result["need"] == "reindex"
     assert "boom" in result["reindex_error"]
     # tree já materializado em disco apesar da falha do reindex
-    assert (home.library / "a.md").read_text() == (
+    assert (home.library / "a.md").read_text(encoding="utf-8") == (
         "---\nid: 01A\ntitle: A\n---\nv1\n")
     assert not (home.root / "index.lock").exists()
 
@@ -603,7 +605,7 @@ def test_restore_dry_run_valid_ref_shows_diff_stat_and_dirty_flag(tmp_path):
     ref1 = commit(home, "feat: v1")
     _note(home, "a", "01A", "A", "v2")
     commit(home, "feat: v2")
-    (home.library / "b.md").write_text("dirty\n")
+    (home.library / "b.md").write_text("dirty\n", encoding="utf-8")
     head_before = _head(home)
 
     result = restore_dry_run(home, ref1)

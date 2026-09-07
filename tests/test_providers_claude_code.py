@@ -62,7 +62,8 @@ def test_scan_skips_unreadable_skill_md(tmp_path):
 def test_scan_skips_unparseable_frontmatter(tmp_path):
     d = tmp_path / "broken"
     d.mkdir()
-    (d / "SKILL.md").write_text("---\nname: sem terminador\n", encoding="utf-8")
+    (d / "SKILL.md").write_text("---\nname: sem terminador\n",
+                                encoding="utf-8")
     skills, skipped = scan(tmp_path)
     assert skills == []
     assert len(skipped) == 1

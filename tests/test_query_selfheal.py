@@ -25,7 +25,7 @@ def _home(tmp_path):
 
 def _write(home, name, meta_lines, body):
     (home.library / f"{name}.md").write_text(
-        "---\n" + "\n".join(meta_lines) + "\n---\n" + body)
+        "---\n" + "\n".join(meta_lines) + "\n---\n" + body, encoding="utf-8")
 
 
 def _stamped_version(home):

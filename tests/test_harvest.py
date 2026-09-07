@@ -111,7 +111,7 @@ def test_harvest_changed_skill_emits_update(tmp_path):
     home = _mkhome(tmp_path)
     skills_dir = tmp_path / "skills"
     _write_skill(skills_dir, "a", name="a-skill", body="Corpo A.\n")
-    _f_meta, _ = parse((skills_dir / "a" / "SKILL.md").read_text())
+    _f_meta, _ = parse((skills_dir / "a" / "SKILL.md").read_text(encoding="utf-8"))
     con = connect(home)
     body = "Corpo A.\n"
     chash = hashlib.sha256(body.encode("utf-8")).hexdigest()

@@ -26,9 +26,9 @@ def test_init_creates_layout(tmp_path):
 def test_init_idempotent_preserves_config(tmp_path):
     home = NeurataHome(tmp_path)
     home.init()
-    cfg = json.loads(home.config_path.read_text())
+    cfg = json.loads(home.config_path.read_text(encoding="utf-8"))
     cfg["custom"] = "keep"
-    home.config_path.write_text(json.dumps(cfg))
+    home.config_path.write_text(json.dumps(cfg), encoding="utf-8")
     home.init()
     assert home.load_config()["custom"] == "keep"
 

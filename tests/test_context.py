@@ -103,6 +103,10 @@ def test_session_precedencia(tmp_path, monkeypatch):
 
 
 def test_session_em_branco_e_ausente(tmp_path, monkeypatch):
+    # o fallback tem que sair do ambiente REAL: rodando dentro de um
+    # agente, CLAUDE_CODE_SESSION_ID está setado e o teste passava a
+    # medir a máquina em vez da precedência
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     monkeypatch.setenv("NEURATA_SESSION", "  ")
     assert _ctx(cwd=tmp_path).session is None
 

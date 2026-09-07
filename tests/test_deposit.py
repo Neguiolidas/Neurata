@@ -20,7 +20,7 @@ def test_deposit_text_creates_inbox_file(tmp_path):
     files = list(home.inbox.glob("*.md"))
     assert len(files) == 1
     assert files[0].name.endswith("-fts5-probe.md")
-    meta, body = parse(files[0].read_text())
+    meta, body = parse(files[0].read_text(encoding="utf-8"))
     assert meta["id"] == rec["id"]
     assert meta["type"] == "note"
     assert meta["title"] == "FTS5 probe"
@@ -45,10 +45,10 @@ def test_duplicate_appends_event_not_file(tmp_path):
 def test_deposit_from_file(tmp_path):
     home = _home(tmp_path)
     src = tmp_path / "doc.md"
-    src.write_text("# Título do doc\ncorpo")
+    src.write_text("# Título do doc\ncorpo", encoding="utf-8")
     rec = deposit(home, file=src)
     assert rec["action"] == "created"
-    meta, _ = parse(next(iter(home.inbox.glob("*.md"))).read_text())
+    meta, _ = parse(next(iter(home.inbox.glob("*.md"))).read_text(encoding="utf-8"))
     assert meta["source"]["origin"] == str(src)
 
 
@@ -65,7 +65,7 @@ def test_empty_and_whitespace_only_rejected(tmp_path):
         deposit(home, "   \n\t  ")
     # arquivo whitespace-only também é rejeitado
     src = tmp_path / "blank.md"
-    src.write_text("  \n  ")
+    src.write_text("  \n  ", encoding="utf-8")
     with pytest.raises(DepositError, match="vazio"):
         deposit(home, file=src)
     assert list(home.inbox.glob("*.md")) == []
@@ -109,7 +109,7 @@ def test_multiline_title_is_sanitized_and_frontmatter_reparses(tmp_path):
     home = _home(tmp_path)
     rec = deposit(home, "corpo qualquer", title="line1\nline2")
     assert rec["action"] == "created"
-    text = (home.root / rec["path"]).read_text()
+    text = (home.root / rec["path"]).read_text(encoding="utf-8")
     meta, _ = parse(text)
     assert meta["title"] == "line1 line2"
 
@@ -118,7 +118,7 @@ def test_git_envelope_flattened_in_frontmatter_nested_in_log(tmp_path):
     # Rodar do root do repo Neurata dá git context de graça no envelope.
     home = _home(tmp_path)
     rec = deposit(home, "conteúdo com git context")
-    meta, _ = parse(next(iter(home.inbox.glob("*.md"))).read_text())
+    meta, _ = parse(next(iter(home.inbox.glob("*.md"))).read_text(encoding="utf-8"))
     # source é dict 1 nível de escalares — round-trip via parse prova subset.
     assert meta["source"]["git_commit"]
     assert meta["source"]["git_branch"]

@@ -55,14 +55,15 @@ def test_stale_index_warns(tmp_path):
     home = _home(tmp_path)
     reindex(home)
     time.sleep(1.1)  # last_reindex tem resolução de segundos
-    (home.library / "novo.md").write_text("---\nid: 01X\ntitle: N\n---\nc\n")
+    (home.library / "novo.md").write_text("---\nid: 01X\ntitle: N\n---\nc\n",
+                                          encoding="utf-8")
     checks = _by_name(run_checks(home))
     assert checks["index-freshness"].status == "warn"
 
 
 def test_skipped_files_warn(tmp_path):
     home = _home(tmp_path)
-    (home.library / "quebrado.md").write_text("---\nsem fim")
+    (home.library / "quebrado.md").write_text("---\nsem fim", encoding="utf-8")
     reindex(home)
     checks = _by_name(run_checks(home))
     assert checks["skipped-files"].status == "warn"
@@ -72,7 +73,7 @@ def test_skipped_files_warn(tmp_path):
 def test_stale_lock_warns(tmp_path):
     home = _home(tmp_path)
     reindex(home)
-    (home.root / "index.lock").write_text("999999999")
+    (home.root / "index.lock").write_text("999999999", encoding="utf-8")
     checks = _by_name(run_checks(home))
     assert checks["lock"].status == "warn"
 
@@ -91,7 +92,7 @@ def test_corrupt_index_fails_cleanly(tmp_path):
 def test_freshness_same_second_not_stale(tmp_path):
     home = _home(tmp_path)
     path = home.library / "mesmo-segundo.md"
-    path.write_text("---\nid: 01Y\ntitle: T\n---\nb\n")
+    path.write_text("---\nid: 01Y\ntitle: T\n---\nb\n", encoding="utf-8")
     reindex(home)
     con = sqlite3.connect(home.index_path)
     last = con.execute(
@@ -127,10 +128,12 @@ def test_freshness_warns_when_indexed_file_edited_out_of_band(tmp_path):
     índice ficou com o corpo velho. Hash diferente -> warn."""
     home = _home(tmp_path)
     path = home.library / "editada.md"
-    path.write_text("---\nid: 01W\ntitle: T\n---\ncorpo original\n")
+    path.write_text("---\nid: 01W\ntitle: T\n---\ncorpo original\n",
+                    encoding="utf-8")
     reindex(home)
     time.sleep(1.1)
-    path.write_text("---\nid: 01W\ntitle: T\n---\ncorpo TROCADO por fora\n")
+    path.write_text("---\nid: 01W\ntitle: T\n---\ncorpo TROCADO por fora\n",
+                    encoding="utf-8")
     checks = _by_name(run_checks(home))
     assert checks["index-freshness"].status == "warn"
     assert "reindex" in checks["index-freshness"].remedy
@@ -138,7 +141,8 @@ def test_freshness_warns_when_indexed_file_edited_out_of_band(tmp_path):
 
 def test_archive_ok_when_nothing_compacted(tmp_path):
     home = _home(tmp_path)
-    (home.library / "n.md").write_text("---\nid: 01Z\ntitle: T\n---\ncorpo\n")
+    (home.library / "n.md").write_text("---\nid: 01Z\ntitle: T\n---\ncorpo\n",
+                                       encoding="utf-8")
     reindex(home)
     checks = _by_name(run_checks(home))
     assert checks["archive"].status == "ok"
@@ -148,7 +152,8 @@ def test_archive_ok_when_blob_present(tmp_path):
     home = _home(tmp_path)
     sha = archive.put(home, b"full original")
     (home.library / "c.md").write_text(
-        f"---\nid: 01A\ntitle: T\nderived_from: {sha}\n---\nsummary\n")
+        f"---\nid: 01A\ntitle: T\nderived_from: {sha}\n---\nsummary\n",
+        encoding="utf-8")
     reindex(home)
     checks = _by_name(run_checks(home))
     assert checks["archive"].status == "ok"
@@ -158,7 +163,8 @@ def test_archive_fails_when_blob_missing(tmp_path):
     home = _home(tmp_path)
     missing_sha = "a" * 64
     (home.library / "c.md").write_text(
-        f"---\nid: 01B\ntitle: T\nderived_from: {missing_sha}\n---\nsum\n")
+        f"---\nid: 01B\ntitle: T\nderived_from: {missing_sha}\n---\nsum\n",
+        encoding="utf-8")
     reindex(home)
     checks = _by_name(run_checks(home))
     assert checks["archive"].status == "fail"
@@ -176,7 +182,7 @@ def test_usage_ok_when_no_log(tmp_path):
 def test_usage_warns_on_corrupt_lines(tmp_path):
     home = _home(tmp_path)
     reindex(home)
-    (home.logs / "usage.jsonl").write_text("{not json\n")
+    (home.logs / "usage.jsonl").write_text("{not json\n", encoding="utf-8")
     checks = _by_name(run_checks(home))
     assert checks["usage"].status == "warn"
     assert "1" in checks["usage"].detail
@@ -217,7 +223,7 @@ def test_snapshot_auto_push_without_remote_warns(tmp_path):
     home = _home(tmp_path)
     cfg = home.load_config()
     cfg["snapshot"] = {"auto_push": True, "remote": None}
-    home.config_path.write_text(json.dumps(cfg))
+    home.config_path.write_text(json.dumps(cfg), encoding="utf-8")
     check = _by_name(run_checks(home))["snapshot"]
     assert check.status == "warn"
     assert "auto_push" in check.detail
@@ -265,7 +271,8 @@ def test_regime_detecta_pista_dessincronizada(tmp_path):
 # ── derived-integrity: espelho compactado com fonte/blob íntegro ──────────────
 def test_derived_integrity_ok_when_nothing_compacted(tmp_path):
     home = _home(tmp_path)
-    (home.library / "n.md").write_text("---\nid: 01Z\ntitle: T\n---\ncorpo\n")
+    (home.library / "n.md").write_text("---\nid: 01Z\ntitle: T\n---\ncorpo\n",
+                                       encoding="utf-8")
     reindex(home)
     checks = _by_name(run_checks(home))
     assert checks["derived-integrity"].status == "ok"
@@ -278,11 +285,12 @@ def test_derived_integrity_ok_when_blob_and_source_present(tmp_path):
     # Cria arquivo espelhado com blob no archive e source_path válido
     sha = archive.put(home, b"full original")
     source = home.library / "fonte.md"
-    source.write_text("---\nid: espelho\ntitle: T\n---\noriginal\n")
+    source.write_text("---\nid: espelho\ntitle: T\n---\noriginal\n",
+                      encoding="utf-8")
     entry = home.library / "c.md"
     entry.write_text(
         f"---\nid: 01A\ntitle: T\nderived_from: {sha}\n"
-        f"source_path: library/fonte.md\n---\nsummary\n")
+        f"source_path: library/fonte.md\n---\nsummary\n", encoding="utf-8")
     reindex(home)
     checks = _by_name(run_checks(home))
     assert checks["derived-integrity"].status == "ok"
@@ -297,7 +305,8 @@ def test_derived_integrity_ok_with_null_source_path(tmp_path):
     sha = archive.put(home, b"full original")
     entry = home.library / "c.md"
     entry.write_text(
-        f"---\nid: 01A\ntitle: T\nderived_from: {sha}\n---\nsummary\n")
+        f"---\nid: 01A\ntitle: T\nderived_from: {sha}\n---\nsummary\n",
+        encoding="utf-8")
     reindex(home)
     checks = _by_name(run_checks(home))
     assert checks["derived-integrity"].status == "ok"
@@ -313,7 +322,8 @@ def test_derived_integrity_quiet_on_pre_v11_schema(tmp_path):
     só velho. Quem é dono do assunto é o check `index-schema`, e ele continua
     avisando — um fato, um aviso."""
     home = _home(tmp_path)
-    (home.library / "n.md").write_text("---\nid: 01Z\ntitle: T\n---\ncorpo\n")
+    (home.library / "n.md").write_text("---\nid: 01Z\ntitle: T\n---\ncorpo\n",
+                                       encoding="utf-8")
     reindex(home)
     con = sqlite3.connect(home.index_path)
     con.execute("DROP INDEX IF EXISTS idx_entries_derived_from")
@@ -335,7 +345,8 @@ def test_derived_integrity_fails_when_blob_missing(tmp_path):
     missing_sha = "a" * 64
     entry = home.library / "c.md"
     entry.write_text(
-        f"---\nid: 01B\ntitle: T\nderived_from: {missing_sha}\n---\nsum\n")
+        f"---\nid: 01B\ntitle: T\nderived_from: {missing_sha}\n---\nsum\n",
+        encoding="utf-8")
     reindex(home)
     checks = _by_name(run_checks(home))
     assert checks["derived-integrity"].status == "fail"
@@ -350,7 +361,7 @@ def test_derived_integrity_fails_when_source_missing(tmp_path):
     entry = home.library / "c.md"
     entry.write_text(
         f"---\nid: 01C\ntitle: T\nderived_from: {sha}\n"
-        f"source_path: library/sumiu.md\n---\nsummary\n")
+        f"source_path: library/sumiu.md\n---\nsummary\n", encoding="utf-8")
     reindex(home)
     checks = _by_name(run_checks(home))
     assert checks["derived-integrity"].status == "fail"
@@ -365,7 +376,7 @@ def test_derived_integrity_fails_when_both_missing(tmp_path):
     entry = home.library / "c.md"
     entry.write_text(
         f"---\nid: 01D\ntitle: T\nderived_from: {missing_sha}\n"
-        f"source_path: library/sumiu.md\n---\nsummary\n")
+        f"source_path: library/sumiu.md\n---\nsummary\n", encoding="utf-8")
     reindex(home)
     checks = _by_name(run_checks(home))
     assert checks["derived-integrity"].status == "fail"

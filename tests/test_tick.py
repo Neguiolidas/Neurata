@@ -131,7 +131,8 @@ def test_symlink_outside_inbox_quarantined_target_untouched(tmp_path):
     outside = tmp_path / "outside"
     outside.mkdir()
     target = outside / "secret.md"
-    target.write_text("# Segredo\n\nConteudo sensivel fora do inbox.\n")
+    target.write_text("# Segredo\n\nConteudo sensivel fora do inbox.\n",
+                      encoding="utf-8")
     link = home.inbox / "link.md"
     link.symlink_to(target)
 
@@ -142,7 +143,7 @@ def test_symlink_outside_inbox_quarantined_target_untouched(tmp_path):
     assert "guard" in report.errors[0].reason
     assert not link.exists()
     assert (home.quarantine / "link.md").is_symlink()
-    assert target.read_text() == "# Segredo\n\nConteudo sensivel fora do inbox.\n"
+    assert target.read_text(encoding="utf-8") == "# Segredo\n\nConteudo sensivel fora do inbox.\n"
 
 
 def test_unparseable_frontmatter_alphabetized_body_verbatim(tmp_path):
@@ -155,7 +156,7 @@ def test_unparseable_frontmatter_alphabetized_body_verbatim(tmp_path):
     assert report.literate == 1
     assert report.processed == 1
     dest = next(home.library.glob("*.md"))
-    meta, body = parse(dest.read_text())
+    meta, body = parse(dest.read_text(encoding="utf-8"))
     assert body == original
     assert meta["grain_quality"] == "mechanical"
 
@@ -168,7 +169,7 @@ def test_alphabetize_body_byte_exact_no_frontmatter(tmp_path):
     curate_tick(home)
 
     dest = next(home.library.glob("*.md"))
-    _, body = parse(dest.read_text())
+    _, body = parse(dest.read_text(encoding="utf-8"))
     assert body == original
 
 
@@ -181,7 +182,7 @@ def test_body_untouched_when_frontmatter_already_present(tmp_path):
     curate_tick(home)
 
     dest = next(home.library.glob("*.md"))
-    _, got_body = parse(dest.read_text())
+    _, got_body = parse(dest.read_text(encoding="utf-8"))
     assert got_body == body
 
 
@@ -330,7 +331,7 @@ def test_conflict_journal_failure_does_not_increment_conflict_counter(
     assert report.processed == 2
     assert report.conflicts == 0
     dest = next(home.library.glob("novo*.md"))
-    meta, _ = parse(dest.read_text())
+    meta, _ = parse(dest.read_text(encoding="utf-8"))
     # marca ficou gravada no frontmatter (ação física já ocorrida antes
     # do journal), mas o journal/contador não pode mentir sobre isso.
     assert meta["conflicts_with"] == [lib_id]
@@ -357,7 +358,7 @@ def test_update_journal_failure_does_not_increment_updated_counter(
     # ação física (write na library + unlink do inbox) já ocorreu antes
     # do journal: bug seria contador mentir mesmo assim.
     dest = home.library / "foo.md"
-    _, got_body = parse(dest.read_text())
+    _, got_body = parse(dest.read_text(encoding="utf-8"))
     assert got_body == new_body
     assert list(home.inbox.glob("*.md")) == []
     journal = _journal(home)
@@ -388,7 +389,7 @@ def test_stale_journal_guard_rejection_does_not_increment_stale_counter(
     report = curate_tick(home)
 
     assert report.stale == 0
-    meta, _ = parse((home.library / "foo.md").read_text())
+    meta, _ = parse((home.library / "foo.md").read_text(encoding="utf-8"))
     assert meta.get("stale") == "true"  # ação física já ocorreu
     assert "stale_since" in meta
     assert any("path suspeito" in e.reason for e in report.errors)
@@ -446,7 +447,8 @@ def test_orphan_catalog_journal_failure_does_not_increment_processed(
     home = _home(tmp_path)
     (home.library / "orfao.md").write_text(
         "---\nid: 01ORFAOFAIL0000000000\ntitle: Orfao\n---\n"
-        "Arquivo que apareceu em library fora do indice, sem par.\n")
+        "Arquivo que apareceu em library fora do indice, sem par.\n",
+        encoding="utf-8")
     _fail_append_log_for_verb(monkeypatch, home, "catalog")
 
     report = curate_tick(home)
@@ -556,7 +558,7 @@ def test_near_dup_above_threshold_marks_conflict(tmp_path):
     assert report.processed == 2
     assert report.conflicts == 1
     dest = next(home.library.glob("novo*.md"))
-    meta, _ = parse(dest.read_text())
+    meta, _ = parse(dest.read_text(encoding="utf-8"))
     assert meta["conflicts_with"] == [lib_id]
 
 
@@ -579,7 +581,7 @@ def test_near_dup_below_threshold_no_mark(tmp_path):
     assert report.processed == 2
     assert report.conflicts == 0
     dest = next(home.library.glob("novo*.md"))
-    meta, _ = parse(dest.read_text())
+    meta, _ = parse(dest.read_text(encoding="utf-8"))
     assert "conflicts_with" not in meta
 
 
@@ -598,7 +600,7 @@ def test_near_dup_tie_picks_smaller_ulid(tmp_path):
 
     assert report.conflicts == 1
     dest = next(home.library.glob("novo*.md"))
-    meta, _ = parse(dest.read_text())
+    meta, _ = parse(dest.read_text(encoding="utf-8"))
     assert meta["conflicts_with"] == ["01AAAAAAAAAAAAAAAAAAAAAA"]
 
 
@@ -665,7 +667,8 @@ def test_orphan_file_adopted(tmp_path):
     home = _home(tmp_path)
     (home.library / "orfao.md").write_text(
         "---\nid: 01ORFAO000000000000000\ntitle: Orfao\n---\n"
-        "Arquivo que apareceu em library fora do indice, sem par.\n")
+        "Arquivo que apareceu em library fora do indice, sem par.\n",
+        encoding="utf-8")
 
     report = curate_tick(home)
 
@@ -683,7 +686,8 @@ def test_dead_entry_removed_when_file_missing_and_no_hash_pair(tmp_path):
     home = _home(tmp_path)
     (home.library / "vai-sumir.md").write_text(
         "---\nid: 01DEAD0000000000000000\ntitle: Vai Sumir\n---\n"
-        "Este arquivo sera removido do disco antes do tick rodar aqui.\n")
+        "Este arquivo sera removido do disco antes do tick rodar aqui.\n",
+        encoding="utf-8")
     reindex(home)
     (home.library / "vai-sumir.md").unlink()
 
@@ -789,7 +793,7 @@ def test_skill_item_noop_when_hash_matches_library(tmp_path):
     _lib_skill_entry(home, "foo.md", "01SKILLLIB000000000000",
                     "claude-code:foo", "Foo Skill", body)
     reindex(home)
-    original_text = (home.library / "foo.md").read_text()
+    original_text = (home.library / "foo.md").read_text(encoding="utf-8")
     _skill_item(home, "foo-new.md", "01SKILLNEWID00000000000",
                "claude-code:foo", "Foo Skill", body)
 
@@ -806,7 +810,7 @@ def test_skill_item_noop_when_hash_matches_library(tmp_path):
     # Hash igual = nada a absorver: o arquivo não é reescrito, nem no corpo
     # nem no frontmatter. Byte a byte, não "o corpo continua parecido" — um
     # `updated` novo aqui já seria escrita gratuita num grão que não mudou.
-    assert (home.library / "foo.md").read_text() == original_text
+    assert (home.library / "foo.md").read_text(encoding="utf-8") == original_text
     journal = _journal(home)
     catalog_recs = [r for r in journal if r["verb"] == "catalog"]
     assert len(catalog_recs) == 1
@@ -835,7 +839,7 @@ def test_skill_item_update_in_place_preserves_id_slug_path(tmp_path):
     assert list(home.inbox.glob("*.md")) == []
     dest = home.library / "foo.md"
     assert dest.exists()
-    meta, body = parse(dest.read_text())
+    meta, body = parse(dest.read_text(encoding="utf-8"))
     assert body == new_body
     assert meta["id"] == entry_id
     assert meta["title"] == "Foo Skill Renomeado"
@@ -870,7 +874,7 @@ def test_skill_item_update_preserves_extra_frontmatter_keys(tmp_path):
     report = curate_tick(home)
 
     assert report.updated == 1
-    meta, body = parse((home.library / "foo.md").read_text())
+    meta, body = parse((home.library / "foo.md").read_text(encoding="utf-8"))
     assert body == new_body
     assert meta["conflicts_with"] == ["01OUTRO000000000000000"]
     assert meta["cataloged"] == "2026-01-01T00:00:00+00:00"
@@ -903,7 +907,7 @@ def test_tombstone_marks_library_entry_stale(tmp_path):
 
     assert report.stale == 1
     assert list(home.inbox.glob("*.md")) == []
-    meta, got_body = parse((home.library / "foo.md").read_text())
+    meta, got_body = parse((home.library / "foo.md").read_text(encoding="utf-8"))
     assert got_body == body
     assert meta["stale"] == "true"
     assert "stale_since" in meta
@@ -936,7 +940,7 @@ def test_skill_renaissance_after_tombstone_clears_stale(tmp_path):
     _tombstone_item(home, "tomb.md", "01TOMBRENASCE00000000000",
                     "claude-code:foo")
     curate_tick(home)
-    meta, _ = parse((home.library / "foo.md").read_text())
+    meta, _ = parse((home.library / "foo.md").read_text(encoding="utf-8"))
     assert meta["stale"] == "true"
 
     new_body = "Corpo novo depois que a skill foi re-colhida de novo.\n"
@@ -947,7 +951,7 @@ def test_skill_renaissance_after_tombstone_clears_stale(tmp_path):
 
     assert report.updated == 1
     assert report.processed == 0
-    meta2, body2 = parse((home.library / "foo.md").read_text())
+    meta2, body2 = parse((home.library / "foo.md").read_text(encoding="utf-8"))
     assert body2 == new_body
     assert "stale" not in meta2
     assert "stale_since" not in meta2
@@ -1354,7 +1358,7 @@ def test_indexed_inbox_item_does_not_conflict_with_itself(tmp_path):
 
     assert report.conflicts == 0
     dest = next(home.library.glob("solo*.md"))
-    meta, _ = parse(dest.read_text())
+    meta, _ = parse(dest.read_text(encoding="utf-8"))
     assert "conflicts_with" not in meta
 
 
@@ -1370,7 +1374,7 @@ def test_preexisting_self_conflict_is_healed(tmp_path):
     curate_tick(home)
 
     dest = next(home.library.glob("curar*.md"))
-    meta, _ = parse(dest.read_text())
+    meta, _ = parse(dest.read_text(encoding="utf-8"))
     assert "conflicts_with" not in meta
 
 
@@ -1444,7 +1448,7 @@ def test_reconcile_journal_orphans_checks_derived_hash_not_content_hash(
     _lib_skill_entry(home, "dhash.md", entry_id, "claude-code:dhash",
                      "DHash", summary)
     lib_path = home.library / "dhash.md"
-    meta, _ = parse(lib_path.read_text())
+    meta, _ = parse(lib_path.read_text(encoding="utf-8"))
     meta = dict(meta)
     meta["derived_from"] = sha
     lib_path.write_text(serialize(meta, summary), encoding="utf-8")
@@ -1487,7 +1491,7 @@ def test_sync_update_in_place_clears_stale_derived_from(tmp_path):
     _lib_skill_entry(home, "sync.md", entry_id, "claude-code:sync", "Sync",
                      body1, extra_meta=f"derived_from: {old_derived_from}\n")
     reindex(home)
-    meta1, disk_body1 = parse((home.library / "sync.md").read_text())
+    meta1, disk_body1 = parse((home.library / "sync.md").read_text(encoding="utf-8"))
     assert disk_body1 == body1
     assert meta1["derived_from"] == old_derived_from
 
@@ -1505,7 +1509,7 @@ def test_sync_update_in_place_clears_stale_derived_from(tmp_path):
 
     report2 = curate_tick(home)
 
-    meta2, body2 = parse((home.library / "sync.md").read_text())
+    meta2, body2 = parse((home.library / "sync.md").read_text(encoding="utf-8"))
     # Corpo servido é o da fonte, cru: o tick não compacta nada sozinho.
     assert body2 == new_full_body
     assert body2 != body1

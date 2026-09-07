@@ -26,7 +26,8 @@ def test_schema_version_key_allowed(tmp_path):
 def test_override_merges_nested(tmp_path):
     home = _home(tmp_path)
     home.config_path.write_text(json.dumps(
-        {"schema_version": 1, "rrf_k": 30, "bm25_weights": {"title": 9}}))
+        {"schema_version": 1, "rrf_k": 30, "bm25_weights": {"title": 9}}),
+        encoding="utf-8")
     cfg = load(home)
     assert cfg["rrf_k"] == 30
     assert cfg["bm25_weights"]["title"] == 9
@@ -36,28 +37,30 @@ def test_override_merges_nested(tmp_path):
 
 def test_unknown_key_fails(tmp_path):
     home = _home(tmp_path)
-    home.config_path.write_text(json.dumps({"pesso_title": 1}))
+    home.config_path.write_text(json.dumps({"pesso_title": 1}),
+                                encoding="utf-8")
     with pytest.raises(ConfigError, match="desconhecida"):
         load(home)
 
 
 def test_unknown_subkey_fails(tmp_path):
     home = _home(tmp_path)
-    home.config_path.write_text(json.dumps({"bm25_weights": {"titulo": 2}}))
+    home.config_path.write_text(json.dumps({"bm25_weights": {"titulo": 2}}),
+                                encoding="utf-8")
     with pytest.raises(ConfigError, match="desconhecida"):
         load(home)
 
 
 def test_malformed_fails(tmp_path):
     home = _home(tmp_path)
-    home.config_path.write_text("{nada valido")
+    home.config_path.write_text("{nada valido", encoding="utf-8")
     with pytest.raises(ConfigError, match="malformado"):
         load(home)
 
 
 def test_non_numeric_fails(tmp_path):
     home = _home(tmp_path)
-    home.config_path.write_text(json.dumps({"rrf_k": "x"}))
+    home.config_path.write_text(json.dumps({"rrf_k": "x"}), encoding="utf-8")
     with pytest.raises(ConfigError, match="num"):
         load(home)
 
@@ -66,7 +69,8 @@ def test_shelf_non_numeric_still_fails(tmp_path):
     """Regressão: subtree numérico (shelf) não deve ser desviado pro
     ramo tipado de snapshot — continua validando via _require_number."""
     home = _home(tmp_path)
-    home.config_path.write_text(json.dumps({"shelf": {"tau_dias": "x"}}))
+    home.config_path.write_text(json.dumps({"shelf": {"tau_dias": "x"}}),
+                                encoding="utf-8")
     with pytest.raises(ConfigError, match="num"):
         load(home)
 
@@ -79,35 +83,40 @@ def test_snapshot_default_when_missing(tmp_path):
 def test_snapshot_valid_loads(tmp_path):
     home = _home(tmp_path)
     home.config_path.write_text(json.dumps(
-        {"snapshot": {"remote": "origin", "auto_push": True}}))
+        {"snapshot": {"remote": "origin", "auto_push": True}}),
+        encoding="utf-8")
     cfg = load(home)
     assert cfg["snapshot"] == {"remote": "origin", "auto_push": True}
 
 
 def test_snapshot_auto_push_non_bool_fails(tmp_path):
     home = _home(tmp_path)
-    home.config_path.write_text(json.dumps({"snapshot": {"auto_push": 1}}))
+    home.config_path.write_text(json.dumps({"snapshot": {"auto_push": 1}}),
+                                encoding="utf-8")
     with pytest.raises(ConfigError, match="snapshot"):
         load(home)
 
 
 def test_snapshot_auto_push_float_fails(tmp_path):
     home = _home(tmp_path)
-    home.config_path.write_text(json.dumps({"snapshot": {"auto_push": 1.0}}))
+    home.config_path.write_text(json.dumps({"snapshot": {"auto_push": 1.0}}),
+                                encoding="utf-8")
     with pytest.raises(ConfigError, match="snapshot"):
         load(home)
 
 
 def test_snapshot_remote_non_str_fails(tmp_path):
     home = _home(tmp_path)
-    home.config_path.write_text(json.dumps({"snapshot": {"remote": 5}}))
+    home.config_path.write_text(json.dumps({"snapshot": {"remote": 5}}),
+                                encoding="utf-8")
     with pytest.raises(ConfigError, match="snapshot"):
         load(home)
 
 
 def test_snapshot_unknown_subkey_fails(tmp_path):
     home = _home(tmp_path)
-    home.config_path.write_text(json.dumps({"snapshot": {"branch": "main"}}))
+    home.config_path.write_text(json.dumps({"snapshot": {"branch": "main"}}),
+                                encoding="utf-8")
     with pytest.raises(ConfigError, match="desconhecida"):
         load(home)
 
@@ -116,10 +125,11 @@ def test_regime_quota_default_e_validada(tmp_path):
     home = _home(tmp_path)
     assert load(home)["regime"]["curated_quota"] == 3
     home.config_path.write_text(
-        json.dumps({"regime": {"curated_quota": "tres"}}))
+        json.dumps({"regime": {"curated_quota": "tres"}}), encoding="utf-8")
     with pytest.raises(ConfigError, match="regime"):
         load(home)
-    home.config_path.write_text(json.dumps({"regime": {"cota": 3}}))
+    home.config_path.write_text(json.dumps({"regime": {"cota": 3}}),
+                                encoding="utf-8")
     with pytest.raises(ConfigError, match="desconhecida"):
         load(home)
 

@@ -23,7 +23,7 @@ def test_bench_p50_warm(tmp_path):
         (home.library / f"{slug}.md").write_text(
             f"---\nid: 01B{i:04d}\ntitle: Nota {i} {w[0]}\n"
             f"tags: [{w[1]}]\n---\n"
-            f"Corpo sobre {w[2]} e {w[3]} ligando {link}.\n")
+            f"Corpo sobre {w[2]} e {w[3]} ligando {link}.\n", encoding="utf-8")
     reindex(home)
     queries = [f"{_WORDS[i % len(_WORDS)]} {_WORDS[(i + 5) % len(_WORDS)]}"
                for i in range(30)]

@@ -74,11 +74,15 @@ class NeurataHome:
         for d in _DIRS:
             (self.root / d).mkdir(parents=True, exist_ok=True)
         if not self.config_path.exists():
-            self.config_path.write_text(json.dumps(
-                {"schema_version": SCHEMA_VERSION}, indent=2) + "\n")
+            self.config_path.write_text(
+                json.dumps({"schema_version": SCHEMA_VERSION}, indent=2)
+                + "\n", encoding="utf-8")
 
     def load_config(self) -> dict:
-        return json.loads(self.config_path.read_text())
+        # utf-8 explícito nos DOIS lados: o `cli` reescreve o config com
+        # `ensure_ascii=False`, então um remoto com acento vira mojibake
+        # (ou UnicodeDecodeError) num Windows de locale cp1252.
+        return json.loads(self.config_path.read_text(encoding="utf-8"))
 
     def append_log(self, name: str, record: dict) -> None:
         path = self.logs / f"{_safe_log_name(name)}.jsonl"

@@ -25,7 +25,7 @@ def test_optional_agent_session(tmp_path):
 def test_git_context_inside_repo(tmp_path):
     subprocess.run(["git", "init", "-b", "main", str(tmp_path)],
                    check=True, capture_output=True)
-    (tmp_path / "f").write_text("x")
+    (tmp_path / "f").write_text("x", encoding="utf-8")
     subprocess.run(["git", "-C", str(tmp_path), "add", "f"],
                    check=True, capture_output=True)
     subprocess.run(["git", "-C", str(tmp_path), "-c", "user.email=t@t",

@@ -79,6 +79,6 @@ def test_log_invocation_best_effort_never_raises(tmp_path):
     # root aponta pra caminho onde o arquivo não pode ser criado: um
     # arquivo comum no lugar do diretório root faz o open falhar.
     blocker = tmp_path / "blocked"
-    blocker.write_text("x")
+    blocker.write_text("x", encoding="utf-8")
     home = NeurataHome(blocker / "sub")  # sub/ não existe e não dá pra criar
     assert log_invocation(home, "query", 1, True) is False

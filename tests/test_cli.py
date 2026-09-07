@@ -76,7 +76,7 @@ def test_unwritable_home_stays_inside_error_envelope(
     # home.init() levantar NotADirectoryError/OSError ao tentar mkdir.
     # Isso precisa ficar dentro do boundary de erro, não vazar traceback.
     impossible = tmp_path / "file"
-    impossible.write_text("sou um arquivo, não um diretório")
+    impossible.write_text("sou um arquivo, não um diretório", encoding="utf-8")
     monkeypatch.setenv("NEURATA_HOME", str(impossible))
 
     rc = main(["--json", "deposit", "x"])
@@ -405,7 +405,7 @@ def test_shelf_conflicts_json_reports_manual_conflicts_with(
     lib = tmp_path / "library"
     (lib / "conflitante.md").write_text(
         "---\nid: 01CONFLICT\ntitle: Conflitante\n"
-        "conflicts_with: [\"a\"]\n---\ncorpo\n")
+        "conflicts_with: [\"a\"]\n---\ncorpo\n", encoding="utf-8")
 
     rc = main(["shelf", "--conflicts", "--json"])
     assert rc == 0
@@ -483,7 +483,7 @@ def test_tick_exit_code_2_on_item_errors(tmp_path, monkeypatch, capsys):
     home = NeurataHome(tmp_path)
     home.init()
     bad_target = tmp_path / "fora_da_inbox.md"
-    bad_target.write_text("alvo fora do inbox\n")
+    bad_target.write_text("alvo fora do inbox\n", encoding="utf-8")
     (home.inbox / "link.md").symlink_to(bad_target)
     capsys.readouterr()
 
@@ -639,7 +639,8 @@ def test_snapshot_manual_commit_json_noop_then_commits_dirty_change(
 
     # edição direta na library (fora do fluxo tick) -> commita.
     lib_file = _first_lib_file(tmp_path)
-    lib_file.write_text(lib_file.read_text() + "\nlinha extra\n")
+    lib_file.write_text(lib_file.read_text(encoding="utf-8") + "\nlinha extra\n",
+                                           encoding="utf-8")
 
     rc = main(["snapshot", "--json"])
     assert rc == 0
@@ -705,8 +706,8 @@ def test_snapshot_restore_without_yes_is_dry_run_and_never_mutates(
     ref1 = json.loads(capsys.readouterr().out)["result"]["snapshots"][0]["sha"]
 
     lib_file = _first_lib_file(tmp_path)
-    before = lib_file.read_text()
-    lib_file.write_text(before + "\nmudanca sem commit\n")
+    before = lib_file.read_text(encoding="utf-8")
+    lib_file.write_text(before + "\nmudanca sem commit\n", encoding="utf-8")
 
     rc = main(["snapshot", "--restore", ref1, "--json"])
     assert rc == 1
@@ -715,7 +716,7 @@ def test_snapshot_restore_without_yes_is_dry_run_and_never_mutates(
     assert out["result"]["dry_run"] is True
     assert out["result"]["dirty"] is True
     # nada foi tocado.
-    assert lib_file.read_text() == before + "\nmudanca sem commit\n"
+    assert lib_file.read_text(encoding="utf-8") == before + "\nmudanca sem commit\n"
 
 
 def test_snapshot_restore_dry_run_human_output(tmp_path, monkeypatch, capsys):
@@ -741,7 +742,8 @@ def test_snapshot_restore_with_yes_materializes_ref(
     ref1 = json.loads(capsys.readouterr().out)["result"]["snapshots"][0]["sha"]
 
     lib_file = _first_lib_file(tmp_path)
-    lib_file.write_text(lib_file.read_text().replace("v1", "v2 mutante"))
+    lib_file.write_text(lib_file.read_text(encoding="utf-8").replace("v1", "v2 mutante"),
+                                           encoding="utf-8")
     main(["snapshot", "--json"])  # commita v2
     capsys.readouterr()
 
@@ -751,7 +753,7 @@ def test_snapshot_restore_with_yes_materializes_ref(
     assert out["ok"] is True
     assert out["result"]["restored_to"] == ref1
     assert "reindex" in out["result"]
-    assert "v2 mutante" not in lib_file.read_text()
+    assert "v2 mutante" not in lib_file.read_text(encoding="utf-8")
 
 
 def test_snapshot_restore_invalid_ref_without_yes_is_error_exit_2(
@@ -817,7 +819,7 @@ def test_snapshot_set_remote_persists_config_and_push_succeeds(
     assert out["ok"] is True
     assert out["result"]["remote"] == remote_url
 
-    cfg = json.loads((tmp_path / "config.json").read_text())
+    cfg = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
     assert cfg["snapshot"]["remote"] == remote_url
     assert "schema_version" in cfg  # preserva chave existente
 
@@ -839,9 +841,9 @@ def test_snapshot_auto_push_on_tick_pushes_to_configured_remote(
     main(["snapshot", "--set-remote", remote_url])
     capsys.readouterr()
     cfg_path = tmp_path / "config.json"
-    cfg = json.loads(cfg_path.read_text())
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     cfg["snapshot"]["auto_push"] = True
-    cfg_path.write_text(json.dumps(cfg))
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
 
     main(["deposit", "algo pra versionar"])
     capsys.readouterr()
@@ -867,9 +869,9 @@ def test_snapshot_auto_push_failure_does_not_fail_tick_but_logs(
     main(["snapshot", "--set-remote", "file:///nao/existe/nesse/caminho.git"])
     capsys.readouterr()
     cfg_path = tmp_path / "config.json"
-    cfg = json.loads(cfg_path.read_text())
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
     cfg["snapshot"]["auto_push"] = True
-    cfg_path.write_text(json.dumps(cfg))
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
 
     main(["deposit", "algo"])
     capsys.readouterr()
@@ -880,5 +882,5 @@ def test_snapshot_auto_push_failure_does_not_fail_tick_but_logs(
     assert out["ok"] is True
     assert out["result"]["snapshot"] is not None
 
-    log = (tmp_path / "logs" / "snapshot.jsonl").read_text()
+    log = (tmp_path / "logs" / "snapshot.jsonl").read_text(encoding="utf-8")
     assert "push_error" in log
