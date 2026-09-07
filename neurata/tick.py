@@ -25,6 +25,7 @@ from neurata.indexdb import (
     IndexLock,
     class_of,
     connect,
+    entities_of,
     entry_purge,
     fts_insert,
     project_of,
@@ -1013,6 +1014,9 @@ def _index_insert(con, meta: dict, body: str, rel: str, location: str,
     for alias in _aliases(meta):
         con.execute("INSERT OR IGNORE INTO entry_aliases VALUES (?,?)",
                     (str(meta["id"]), alias))
+    for entidade in entities_of(meta):
+        con.execute("INSERT OR IGNORE INTO grain_entities VALUES (?,?)",
+                    (str(meta["id"]), entidade))
     n_edges = _resolve_links(con, str(meta["id"]), body)
     return rowid, n_edges
 

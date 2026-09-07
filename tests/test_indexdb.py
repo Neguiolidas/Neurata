@@ -86,7 +86,7 @@ def test_lock_excludes_and_releases(tmp_path):
 
 def test_stale_lock_is_taken(tmp_path):
     home = _home(tmp_path)
-    (home.root / "index.lock").write_text("999999999")  # pid impossível
+    (home.root / "index.lock").write_text("999999999", encoding="utf-8")  # pid impossível
     with IndexLock(home):
         pass
 
@@ -158,13 +158,13 @@ def test_create_schema_has_source_key_column(tmp_path):
     assert "source_key" in column_names
 
 
-def test_index_schema_version_is_15():
-    """v15 = arestas vivas: `entry_aliases` em tabela, para o tick
-    resolver wikilink por alias em SQL (o reindex resolve em memória).
-    Literal de propósito: o número é contrato com índices no disco,
-    então subir a constante tem que quebrar um teste e forçar um passo
-    de migração."""
-    assert INDEX_SCHEMA_VERSION == 15
+def test_index_schema_version_is_16():
+    """v16 = grafo de entidades leve: `grain_entities` liga o grão aos
+    nomes que ele declara (título/alias/tag/projeto/fonte) — porta
+    única de busca (`entity:`) e nós-hub no PPR. Literal de propósito:
+    o número é contrato com índices no disco, então subir a constante
+    tem que quebrar um teste e forçar um passo de migração."""
+    assert INDEX_SCHEMA_VERSION == 16
 
 
 def test_create_schema_has_project_column(tmp_path):

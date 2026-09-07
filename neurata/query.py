@@ -274,6 +274,13 @@ def _prefilter(parsed: router.ParsedQuery) -> "tuple[str | None, list]":
         clauses.append("EXISTS(SELECT 1 FROM entry_tags t"
                        " WHERE t.entry_rowid = e.rowid AND t.tag = ?)")
         params.append(tag)
+    if "entity" in parsed.facets:
+        # membrosia do grafo de entidades (v1.10): grão que É a
+        # entidade (título/alias) ou que a TOCA (tag/projeto/fonte) —
+        # valor lower-cased porque a extração canoniza
+        clauses.append("EXISTS(SELECT 1 FROM grain_entities g"
+                       " WHERE g.entry_id = e.id AND g.entity = ?)")
+        params.append(parsed.facets["entity"].lower())
     if not clauses:
         return None, []
     return ("SELECT e.rowid FROM entries e WHERE "  # nosec B608
@@ -367,6 +374,15 @@ def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
         adj = linkgraph.load_adjacency(con)
         if adj:
             nbrs = linkgraph.neighbors(adj, seeds) - set(scores)
+            # V1.10: vizinhos-hub (ids negativos = entidades) expandem
+            # para os MEMBROS da entidade — é o que leva o lift do grafo
+            # a um grão que não cita nem é citado, mas compartilha um
+            # nome com quem a query já elegeu. O hub em si não é
+            # candidato (não tem entry/rowid de card).
+            hubs = {n for n in nbrs if n < 0}
+            for h in sorted(hubs):
+                nbrs |= adj.get(h, set())
+            nbrs -= set(scores) | hubs
             nbrs = _filter_rowids(con, nbrs, pre_sql, pre_params)
             pr = linkgraph.ppr(adj, seeds)
             cand = set(scores) | nbrs

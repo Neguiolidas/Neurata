@@ -30,6 +30,7 @@ from neurata.indexdb import (
     connect,
     create_schema,
     drop_schema,
+    entities_of,
     fts_insert,
     project_of,
     provenance,
@@ -256,6 +257,9 @@ def _insert(con: sqlite3.Connection, meta: dict, body: str, rel: str,
     for alias in _aliases(meta):
         con.execute("INSERT OR IGNORE INTO entry_aliases VALUES (?,?)",
                     (str(meta["id"]), alias))
+    for entidade in entities_of(meta):
+        con.execute("INSERT OR IGNORE INTO grain_entities VALUES (?,?)",
+                    (str(meta["id"]), entidade))
     _write_grains(con, str(meta["id"]), meta, body, old_grains, derived_hash)
     return rowid
 

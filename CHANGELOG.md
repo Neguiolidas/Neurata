@@ -6,6 +6,59 @@ v0.4–v0.7 shipped under the 0.8.0 release. None of the 0.x versions was
 ever tagged or uploaded anywhere — they are development history, kept
 for the record. For anyone installing the package, 1.0.0 is the history.
 
+## [1.10.0] - 2026-09-06
+
+The graph knew only what grains say about *each other* (`[[wikilinks]]`,
+v1.9). What grains are *about* — their title, aliases, tags, project,
+source — was scattered across facets that never talked: `tag:`,
+`project:` and an alias search were three queries answering one
+question. 1.10 makes those names first-class: an entity graph, light,
+deterministic, no NER and no LLM.
+
+### Added
+- **`indexdb.entities_of(meta)`** — the single derivation point: a
+  grain's entities are the names it declares (title, aliases, tags,
+  its project, its source's namespace), canonicalized lower-case,
+  minimum two characters. The `source_key` contributes its *namespace*
+  (`fonte@hash`), not the per-file key — the full key connects one
+  grain to nothing; the source is what aggregates.
+- **`grain_entities` membership table** (schema v16, additive,
+  migrated in place, created empty — the 87 s reindex backfills, same
+  pact as v13/v15). Written by both the tick and the reindex from the
+  same derivation; `entry_purge` cleans it.
+- **`entity:` facet** — one query answers "everything about X": the
+  grain that *is* the entity (title/alias), the grains that *touch* it
+  (tag/project/source). Case-insensitive, open domain, like `tag:`.
+- **Entities as PPR hubs**: the adjacency gains a synthetic negative-id
+  hub node per entity, joined to every member, and the query's one-hop
+  neighbor union expands through those hubs. A grain that never matches
+  a query lexically can now enter the result through the graph — proven
+  by test: a grain with a clean body, title and alias appears for
+  `postgres` only while its membership exists.
+- **A hub is built only for an entity that names between 2 and 64
+  grains** — the band where a shared name is a *relation*. Below it the
+  hub is a loop that hands a grain its own mass back, stealing it from
+  the real `[[link]]` edges it should have gone to. Above it the entity
+  is a *category*, and dilution alone does not pay for it: measured on a
+  synthetic archive, a hub of 2,401 members took the search from 87 ms
+  to 738 ms and filled the top ten with grains sharing no word with the
+  query; with the ceiling, 59 ms and only the grain that matches. The
+  ceiling touches the ranking alone — the membership table keeps every
+  row, so `entity:` still answers for a source with thousands of
+  mirrors.
+
+### Changed
+- The full `reindex` now also backfills `grain_entities` (and
+  `entry_aliases`) on indexes migrated with the tables empty — one pass
+  fills every derived structure the band introduced.
+
+### Fixed
+- `config.json` is now read as UTF-8 explicitly. The CLI already wrote
+  it as UTF-8 with `ensure_ascii=False`, so a snapshot remote carrying
+  an accent round-tripped through the platform's locale on the way back
+  in — mojibake, or an outright decode error, on a Windows box running
+  cp1252.
+
 ## [1.9.0] - 2026-09-06
 
 `edges` was **0** across the whole archive after a complete reindex —

@@ -63,6 +63,9 @@ neurata query "term missing:agent"    # the gaps: curated grains with no agent
 neurata query "term tag:osint"        # tags the SOURCE declared (v1.8 carries
                                       # them from yaml/skill/markdown into
                                       # the index — mirrors included)
+neurata query "entity:postgres"       # every grain that names it: title,
+                                      # alias, tag, project or source, in
+                                      # one query (see Entity graph below)
 neurata query "term --include-stale"  # tombstoned grains are excluded by
                                       # default; this flag brings them back
 neurata expand <id>          # card → summary → full
@@ -102,6 +105,11 @@ neurata harvest ~/rules --format rules # or pinned: skill-md, markdown, mdc,
 # archive health
 neurata doctor
 neurata --version
+
+# rebuild the whole index from the files (the files are the truth, so
+# this is always safe): resolves every wikilink, refills the alias and
+# entity tables, recomputes contradictions
+neurata reindex
 ```
 
 ## Living links (wikilinks → graph)
@@ -115,6 +123,31 @@ the full reindex applies. Edges feed the Personalized PageRank leg of
 the ranking — a grain linked from the top results rises, with no LLM
 and no embedding. `neurata reindex` reconciles the whole graph (and
 backfills the alias table) whenever you want a full pass.
+
+## Entity graph (light)
+
+Every grain declares the entities it is about — title, aliases, tags,
+project, source — extracted deterministically (no NER, no LLM) into a
+membership table. One facet searches across all the names:
+
+```bash
+neurata query "entity:postgres"   # grains that ARE, tag, or come from
+                                  # the entity — title, alias, tag,
+                                  # project and source in one query
+```
+
+Entities are also hubs in the graph leg of the ranking: grains that
+share a name rise together even with no `[[link]]` between them. A hub
+is built only for an entity naming between 2 and 64 grains — the band
+where a shared name is a relation. A name carried by a single grain
+would only hand that grain its own mass back, and a name carried by
+half the archive is a category: it costs real time and drags in grains
+that share no word with the query. The ceiling applies to the ranking
+alone — `entity:` still answers for a source with thousands of mirrors.
+
+Editing frontmatter (adding an alias) requires `neurata reindex` for
+the membership to follow; body changes are absorbed by the tick as
+usual.
 
 ## Context bias (deterministic)
 
@@ -157,9 +190,9 @@ NEURATA_SESSION=$ID neurata query "deploy"      # session affinity
 
 `tick` also absorbs edits: fix a grain's **body** in your editor and the
 next tick re-hashes it into the index, keeping its id, slug and
-provenance. Editing only the frontmatter (`class:`, `type:`, `tags:`)
-leaves the body unchanged, so the tick sees nothing to absorb — run
-`neurata reindex` after those.
+provenance. Editing only the frontmatter (`class:`, `type:`, `tags:`,
+`aliases:`) leaves the body unchanged, so the tick sees nothing to
+absorb — run `neurata reindex` after those.
 
 **Principles**
 
@@ -180,7 +213,7 @@ leaves the body unchanged, so the tick sees nothing to absorb — run
 - Nothing is ever destroyed: archive + quarantine, never delete.
 - Zero runtime dependencies. Python ≥ 3.10.
 
-**Status:** v1.4.0, in daily use on a real vault. `neurata doctor` reports
-index health at any moment.
+**Status:** v1.10.0, in daily use on a real vault. `neurata doctor`
+reports index health at any moment.
 
 **License:** AGPL-3.0-or-later.

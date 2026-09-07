@@ -36,8 +36,11 @@ _REMEDY = (
 # busca que não consulta o marcador não muda um resultado); v15:
 # `entry_aliases` — aliases normalizados em tabela, o que permite ao
 # TICK resolver wikilink por alias em SQL (o reindex resolve em
-# memória; a tabela é a ponte dos dois caminhos).
-INDEX_SCHEMA_VERSION = 15
+# memória; a tabela é a ponte dos dois caminhos); v16: grafo de
+# entidades leve — `grain_entities` liga o grão aos nomes que ele
+# declara (título, alias, tag, projeto, fonte), uma porta única de
+# busca e nós-hub no PPR.
+INDEX_SCHEMA_VERSION = 16
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
@@ -53,6 +56,12 @@ CREATE TABLE IF NOT EXISTS entry_aliases(
   PRIMARY KEY(entry_id, alias)
 );
 CREATE INDEX IF NOT EXISTS idx_entry_aliases_alias ON entry_aliases(alias);
+CREATE TABLE IF NOT EXISTS grain_entities(
+  entry_id TEXT NOT NULL,
+  entity TEXT NOT NULL,
+  PRIMARY KEY(entry_id, entity)
+);
+CREATE INDEX IF NOT EXISTS idx_grain_entities_entity ON grain_entities(entity);
 CREATE TABLE IF NOT EXISTS edges(
   src_id TEXT NOT NULL,
   dst_id TEXT NOT NULL,
@@ -198,6 +207,7 @@ def entry_purge(con: sqlite3.Connection, rowid: int, entry_id: str) -> None:
     con.execute("DELETE FROM curated_fts WHERE rowid=?", (rowid,))
     con.execute("DELETE FROM entry_tags WHERE entry_rowid=?", (rowid,))
     con.execute("DELETE FROM entry_aliases WHERE entry_id=?", (entry_id,))
+    con.execute("DELETE FROM grain_entities WHERE entry_id=?", (entry_id,))
     # Afirmações e contradições moram no grão: aresta de contradição é
     # apagada nas DUAS direções, senão o sobrevivente do par continua
     # anotado como contradizendo um grão que não existe mais.
@@ -256,6 +266,39 @@ def class_of(meta: dict) -> "str | None":
     if meta.get("source_key"):
         return None
     return "episodic"
+
+
+def entities_of(meta: dict) -> "set[str]":
+    """Nomes canônicos (lower-case, strip, mínimo 2 chars) que o grão
+    DECLARA — o grafo de entidades leve da v1.10. Sem NER: só o
+    material que o envelope/harvest já tocam (título, alias, tag,
+    projeto, fonte). Ponto único de derivação: tick e reindex passam
+    por aqui, então nenhum inventa entidade que o grão não declara.
+
+    O source_key entra pelo NAMESPACE (`fonte@hash` de
+    `fonte@hash:caminho`) — o source_key completo é único por arquivo
+    e conectaria um grão a nada; a fonte é o que agrega."""
+    nomes: set[str] = set()
+
+    def _add(valor) -> None:
+        if isinstance(valor, str) and len(valor.strip()) >= 2:
+            nomes.add(valor.strip().lower())
+        elif isinstance(valor, (list, tuple)):
+            for item in valor:
+                _add(item)
+
+    _add(meta.get("title"))
+    _add(meta.get("aliases"))
+    _add(meta.get("tags"))
+    projeto = project_of(meta)
+    if projeto:
+        nomes.add(projeto.lower())
+    sk = meta.get("source_key")
+    if isinstance(sk, str) and sk.strip():
+        namespace = sk.split(":")[0].strip()
+        if len(namespace) >= 2:
+            nomes.add(namespace.lower())
+    return nomes
 
 
 def provenance(meta: dict) -> "tuple[str | None, str | None, str | None]":
@@ -904,9 +947,31 @@ def _v14_to_v15(con: sqlite3.Connection, home: NeurataHome) -> None:
         raise
 
 
+def _v15_to_v16(con: sqlite3.Connection, home: NeurataHome) -> None:
+    """v15 → v16: grafo de entidades leve (v1.10). A membrosia nasce
+    VAZIA (migração não lê disco) e os writers (reindex full, tick)
+    preenchem no ciclo normal — o reindex de 87 s backfila o acervo,
+    mesmo pacto do `assertions` (v13) e do `entry_aliases` (v15).
+    """
+    con.execute("BEGIN IMMEDIATE")
+    try:
+        con.execute("CREATE TABLE IF NOT EXISTS grain_entities("
+                    "entry_id TEXT NOT NULL, entity TEXT NOT NULL,"
+                    "PRIMARY KEY(entry_id, entity))")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_grain_entities_entity"
+                    " ON grain_entities(entity)")
+        con.execute("INSERT OR REPLACE INTO meta VALUES"
+                    " ('index_schema_version', '16')")
+        con.commit()
+    except BaseException:
+        con.rollback()
+        raise
+
+
 _MIGRATIONS = {
     7: _v7_to_v8, 8: _v8_to_v9, 9: _v9_to_v10, 10: _v10_to_v11,
     11: _v11_to_v12, 12: _v12_to_v13, 13: _v13_to_v14, 14: _v14_to_v15,
+    15: _v15_to_v16,
 }
 
 
@@ -991,6 +1056,7 @@ def drop_schema(con: sqlite3.Connection) -> None:
     con.execute("DROP TABLE IF EXISTS edges")
     con.execute("DROP TABLE IF EXISTS entry_tags")
     con.execute("DROP TABLE IF EXISTS entry_aliases")
+    con.execute("DROP TABLE IF EXISTS grain_entities")
     con.execute("DROP TABLE IF EXISTS assertions")
     con.execute("DROP TABLE IF EXISTS contradictions")
     con.execute("DROP TABLE IF EXISTS entries")
