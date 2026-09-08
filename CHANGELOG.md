@@ -1,6 +1,38 @@
 # Changelog
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [1.11.0] - 2026-09-08
+
+A v1.10 made the graph richer, but the stale exclusion happened after the
+ranking graph had already run, and the optional Git snapshot layer trusted the
+host in a few places. 1.11 is a complete hardening pass: stale grains no
+longer influence live results, and snapshot operations fail honestly and stay
+isolated from the machine around them.
+
+### Fixed
+
+- **Stale isolation in the graph**: default queries remove stale rowids from
+  seeds, entity hubs, wikilink adjacency and PPR before propagation. Stale
+  membership remains in the derived tables and `--include-stale` restores the
+  complete population.
+- **Read-only restore preview**: `snapshot --restore REF` and invalid restore
+  refs no longer initialize a Git repository or mutate a fresh home.
+- **Snapshot identity isolation**: every managed library enforces local
+  `neurata <neurata@localhost>` Git identity and the expected local settings,
+  including an existing repository.
+- **Honest Git failures**: UTF-8 output is deterministic; failed `git add`,
+  remote configuration, or initialization no longer reports success or writes
+  a remote to `config.json`.
+- **Snapshot serialization**: remote configuration and push share the Neurata
+  index lock with cataloguing and manual snapshots.
+
+### Compatibility
+
+- Index schema remains v16.
+- CLI/result contract remains v6.
+- No runtime dependencies were added.
+
 Pre-1.0 versions were an internal dogfooding cycle; spec milestones
 v0.4–v0.7 shipped under the 0.8.0 release. None of the 0.x versions was
 ever tagged or uploaded anywhere — they are development history, kept

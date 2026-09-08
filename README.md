@@ -213,7 +213,9 @@ absorb — run `neurata reindex` after those.
 - Nothing is ever destroyed: archive + quarantine, never delete.
 - Zero runtime dependencies. Python ≥ 3.10.
 
-**Status:** v1.10.0, in daily use on a real vault. `neurata doctor`
-reports index health at any moment.
+**Status:** v1.11.0, in daily use on a real vault. `neurata doctor`
+reports index health at any moment. Snapshot previews are read-only, managed
+libraries use an isolated local Git identity, and stale grains are excluded
+from graph propagation unless `--include-stale` is explicit.
 
 **License:** AGPL-3.0-or-later.

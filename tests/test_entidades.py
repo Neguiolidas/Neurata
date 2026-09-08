@@ -283,3 +283,38 @@ def test_entity_nao_e_curinga(tmp_path):
     curate_tick(home)
     assert query(home, "entity:p_stgres")["results"] == []
     assert query(home, "entity:%")["results"] == []
+
+
+def test_stale_nao_vaza_pelo_hub_para_grao_vivo(tmp_path):
+    """Um stale lexical não pode semear o PPR e trazer um membro vivo do
+    mesmo hub; `include_stale` reabre a população completa explicitamente."""
+    home = _home(tmp_path)
+    _grao(home, "stale", "Stale Postgres", "agulha exclusiva.",
+          aliases=["postgres"])
+    _grao(home, "vivo", "Nota Viva", "corpo neutro.", tags=["postgres"])
+    curate_tick(home)
+    con = connect(home)
+    con.execute("UPDATE entries SET stale='true' WHERE id='STALE'")
+    con.commit()
+    con.close()
+
+    assert query(home, "agulha exclusiva")["results"] == []
+    inclusivo = query(home, "agulha exclusiva", include_stale=True)["results"]
+    assert {card["id"] for card in inclusivo} == {"STALE", "VIVO"}
+
+
+def test_stale_lexical_nao_reentra_quando_existe_seed_vivo(tmp_path):
+    home = _home(tmp_path)
+    _grao(home, "stale", "Stale Postgres", "agulha postgres.",
+          aliases=["postgres"])
+    _grao(home, "vivo", "Nota Postgres", "agulha postgres.",
+          tags=["postgres"])
+    curate_tick(home)
+    con = connect(home)
+    con.execute("UPDATE entries SET stale='true' WHERE id='STALE'")
+    con.commit()
+    con.close()
+
+    cards = query(home, "agulha postgres")["results"]
+
+    assert all(card["id"] != "STALE" for card in cards)

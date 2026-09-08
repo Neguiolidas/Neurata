@@ -61,7 +61,11 @@ def test_ensure_repo_creates_git_once_and_is_idempotent(tmp_path, monkeypatch):
 
     monkeypatch.setattr(subprocess, "run", _spy)
     assert ensure_repo(home) is True
-    assert calls == []
+    assert calls  # local identity/config is revalidated on every call
+    assert subprocess.run(
+        ["git", "-C", str(home.library), "config", "--local", "--get",
+         "user.name"], capture_output=True, text=True,
+        check=True).stdout.strip() == "neurata"
 
 
 def test_ensure_repo_returns_false_when_init_fails(tmp_path, monkeypatch):
@@ -84,6 +88,43 @@ def test_ensure_repo_local_identity_isolated(tmp_path):
         capture_output=True, text=True, check=True).stdout.strip()
     assert name == "neurata"
     assert gpgsign == "false"
+
+
+def test_ensure_repo_repairs_identity_on_preexisting_repo(tmp_path):
+    home = _home(tmp_path)
+    subprocess.run(["git", "-C", str(home.library), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(home.library), "config", "user.name",
+                    "host-user"], check=True)
+    subprocess.run(["git", "-C", str(home.library), "config", "user.email",
+                    "host@example.invalid"], check=True)
+
+    assert ensure_repo(home) is True
+    author = subprocess.run(
+        ["git", "-C", str(home.library), "config", "--local", "--get",
+         "user.name"], capture_output=True, text=True, check=True).stdout.strip()
+    email = subprocess.run(
+        ["git", "-C", str(home.library), "config", "--local", "--get",
+         "user.email"], capture_output=True, text=True, check=True).stdout.strip()
+    assert (author, email) == ("neurata", "neurata@localhost")
+
+
+def test_restore_dry_run_invalid_ref_does_not_initialize_repo(tmp_path):
+    home = _home(tmp_path)
+
+    result = restore_dry_run(home, "no-such-ref")
+
+    assert result["ok"] is False
+    assert "error" in result
+    assert not (home.library / ".git").exists()
+
+
+def test_restore_invalid_ref_does_not_initialize_repo(tmp_path):
+    home = _home(tmp_path)
+
+    with pytest.raises(SnapshotError):
+        restore(home, "no-such-ref")
+
+    assert not (home.library / ".git").exists()
 
 
 def test_no_git_everything_returns_falsy_without_raising(tmp_path, monkeypatch):
@@ -186,6 +227,17 @@ def test_set_remote_add_then_update(tmp_path):
         ["git", "-C", str(home.library), "remote", "get-url", "neurata"],
         capture_output=True, text=True, check=True).stdout.strip()
     assert url == "https://example.invalid/b.git"
+
+
+def test_list_snapshots_decodes_unicode_subject(tmp_path):
+    home = _home(tmp_path)
+    ensure_repo(home)
+    (home.library / "nota.md").write_text("conteúdo\n", encoding="utf-8")
+    commit(home, "snapshot: ↻ absorvido ⚠")
+
+    snapshots = list_snapshots(home)
+
+    assert snapshots[0]["subject"] == "snapshot: ↻ absorvido ⚠"
 
 
 # ── _tick_subject / _tick_body / commit_tick (spec §3+§4) ────────────

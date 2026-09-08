@@ -107,9 +107,10 @@ class SnapshotError(RuntimeError):
 def _run(home, *args, timeout=GIT_TIMEOUT, check=False) -> subprocess.CompletedProcess:
     cmd = ["git", "-C", str(home.library), *args]
     try:
-        # check=False literal: quem decide sobre returncode é o `check`
-        # DESTA função, logo abaixo — o subprocess nunca levanta sozinho.
+        # Git subjects/body carry Unicode. Fix the wire encoding instead of
+        # inheriting the host locale (cp1252 on some Windows installations).
         proc = subprocess.run(cmd, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
                               timeout=timeout, check=False)
     except (OSError, subprocess.TimeoutExpired) as exc:
         if check:
@@ -136,21 +137,26 @@ def git_available() -> bool:
     return _AVAIL
 
 
+def _repo_exists(home) -> bool:
+    return (home.library / ".git").exists()
+
+
 def ensure_repo(home) -> bool:
     if not git_available():
         return False
-    if (home.library / ".git").exists():
-        return True
-    _run(home, "init", "-q", "-b", "main")
-    _run(home, "config", "user.name", "neurata")
-    _run(home, "config", "user.email", "neurata@localhost")
-    _run(home, "config", "commit.gpgsign", "false")
-    _run(home, "config", "core.autocrlf", "false")
-    _run(home, "config", "core.hooksPath", "/dev/null")
-    # Return estado REAL: se init falhou (lib ausente/permissão/disco) o
-    # .git não existe — não mentir "pronto" (senão commit degrada a None
-    # silencioso sem log). best-effort honesto.
-    return (home.library / ".git").exists()
+    if not _repo_exists(home):
+        initialized = _run(home, "init", "-q", "-b", "main")
+        if initialized.returncode != 0 or not _repo_exists(home):
+            return False
+    settings = (
+        ("user.name", "neurata"),
+        ("user.email", "neurata@localhost"),
+        ("commit.gpgsign", "false"),
+        ("core.autocrlf", "false"),
+        ("core.hooksPath", "/dev/null"),
+    )
+    return all(_run(home, "config", key, value).returncode == 0
+           for key, value in settings)
 
 
 def has_changes(home) -> bool:
@@ -163,7 +169,9 @@ def has_changes(home) -> bool:
 def commit(home, subject, body="") -> "str | None":
     if not git_available():
         return None
-    _run(home, "add", "-A")
+    added = _run(home, "add", "-A")
+    if added.returncode != 0:
+        raise SnapshotError(added.stderr.strip() or "git add falhou")
     if not has_changes(home):
         return None
     args = ["commit", "-m", subject]
@@ -269,8 +277,11 @@ def restore(home, ref: str) -> dict:
        propagar (exceção nunca vaza meio-caminho).
     """
     with IndexLock(home):
-        ensure_repo(home)
+        if not _repo_exists(home):
+            raise SnapshotError("library não versionada — rode `neurata snapshot`")
         _run(home, "rev-parse", "--verify", f"{ref}^{{commit}}", check=True)
+        if not ensure_repo(home):
+            raise SnapshotError("não foi possível preparar o repositório Git")
 
         autosaved = commit(home, "snapshot: autosave antes de restore")
 
@@ -308,7 +319,9 @@ def restore_dry_run(home, ref: str) -> dict:
     tocar nada, igual ao `restore` real); ref válido → resumo do que o
     restore de verdade faria: `diff --stat HEAD..<ref>` e se há dirty
     (que viraria autosave)."""
-    ensure_repo(home)
+    if not _repo_exists(home):
+        return {"ok": False, "restored_to": ref,
+                "error": f"ref inválido: {ref}"}
     verify = _run(home, "rev-parse", "--verify", f"{ref}^{{commit}}")
     if verify.returncode != 0:
         return {"ok": False, "restored_to": ref,
@@ -319,12 +332,22 @@ def restore_dry_run(home, ref: str) -> dict:
             "would_change": diff_stat, "dirty": has_changes(home)}
 
 
-def set_remote(home, url: str) -> None:
+def _set_remote_unlocked(home, url: str) -> None:
     proc = _run(home, "remote", "get-url", "neurata")
-    if proc.returncode == 0:
-        _run(home, "remote", "set-url", "neurata", url)
-    else:
-        _run(home, "remote", "add", "neurata", url)
+    action = ("set-url", "neurata", url) if proc.returncode == 0 else (
+        "add", "neurata", url)
+    result = _run(home, "remote", *action)
+    if result.returncode != 0:
+        raise SnapshotError(result.stderr.strip() or "configuração do remote falhou")
+
+
+def set_remote(home, url: str) -> None:
+    if not git_available() or not _repo_exists(home):
+        raise SnapshotError("library não versionada — rode `neurata snapshot`")
+    with IndexLock(home):
+        if not ensure_repo(home):
+            raise SnapshotError("não foi possível preparar o repositório Git")
+        _set_remote_unlocked(home, url)
 
 
 def push(home, *, remote_url: "str | None" = None) -> dict:
@@ -337,19 +360,27 @@ def push(home, *, remote_url: "str | None" = None) -> dict:
     if not git_available():
         return {"ok": False, "pushed": False, "remote": remote_url,
                 "error": "git indisponível — instale git"}
-    if not (home.library / ".git").exists():
+    if not _repo_exists(home):
         return {"ok": False, "pushed": False, "remote": remote_url,
                 "error": "library não versionada — rode um tick ou "
-                        "`neurata snapshot`"}
-    if remote_url:
-        set_remote(home, remote_url)
-    proc = _run(home, "remote", "get-url", "neurata")
-    remote = proc.stdout.strip() if proc.returncode == 0 else None
-    if not remote:
-        return {"ok": False, "pushed": False, "remote": None,
-                "error": "remote não configurado — use --set-remote URL"}
-    pushed = _run(home, "push", "neurata", "main", timeout=PUSH_TIMEOUT)
-    if pushed.returncode != 0:
-        return {"ok": False, "pushed": False, "remote": remote,
-                "error": pushed.stderr.strip() or "push falhou"}
-    return {"ok": True, "pushed": True, "remote": remote}
+                "`neurata snapshot`"}
+    with IndexLock(home):
+        if not ensure_repo(home):
+            return {"ok": False, "pushed": False, "remote": remote_url,
+                    "error": "não foi possível preparar o repositório Git"}
+        if remote_url:
+            try:
+                _set_remote_unlocked(home, remote_url)
+            except SnapshotError as exc:
+                return {"ok": False, "pushed": False, "remote": remote_url,
+                        "error": str(exc)}
+        proc = _run(home, "remote", "get-url", "neurata")
+        remote = proc.stdout.strip() if proc.returncode == 0 else None
+        if not remote:
+            return {"ok": False, "pushed": False, "remote": None,
+                    "error": "remote não configurado — use --set-remote URL"}
+        pushed = _run(home, "push", "neurata", "main", timeout=PUSH_TIMEOUT)
+        if pushed.returncode != 0:
+            return {"ok": False, "pushed": False, "remote": remote,
+                    "error": pushed.stderr.strip() or "push falhou"}
+        return {"ok": True, "pushed": True, "remote": remote}

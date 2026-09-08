@@ -369,9 +369,24 @@ def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
     scores = rrf.fuse(ranked, cfg["rrf_k"])
     final = dict(scores)
     via = {r: "lexical" for r in scores}
-    seeds = sorted(scores, key=lambda r: (-scores[r], r))[:_SEEDS]
+    stale_rowids: set = set()
+    if not include_stale:
+        stale_rowids = {r[0] for r in con.execute(
+            "SELECT rowid FROM entries WHERE stale='true'")}
+        for rowid in stale_rowids:
+            final.pop(rowid, None)
+            via.pop(rowid, None)
+            snippets.pop(rowid, None)
+    seeds = sorted(final, key=lambda r: (-final[r], r))[:_SEEDS]
     if seeds:
         adj = linkgraph.load_adjacency(con)
+        if stale_rowids:
+            adj = {
+                node: {neighbor for neighbor in neighbors
+                       if neighbor not in stale_rowids}
+                for node, neighbors in adj.items()
+                if node not in stale_rowids
+            }
         if adj:
             nbrs = linkgraph.neighbors(adj, seeds) - set(scores)
             # V1.10: vizinhos-hub (ids negativos = entidades) expandem
@@ -385,26 +400,15 @@ def _search(con: sqlite3.Connection, cfg: dict, parsed: router.ParsedQuery,
             nbrs -= set(scores) | hubs
             nbrs = _filter_rowids(con, nbrs, pre_sql, pre_params)
             pr = linkgraph.ppr(adj, seeds)
-            cand = set(scores) | nbrs
+            cand = set(final) | nbrs
             mx = max((pr.get(r, 0.0) for r in cand), default=0.0)
             if mx > 0:
                 for r in sorted(cand):
                     final[r] = (final.get(r, 0.0)
                                 + cfg["w_ppr"] * pr.get(r, 0.0) / mx)
                     via.setdefault(r, "graph")
-    # Exclusão de stale (v1.8): antes do corte — um grão morto que
-    # entra no top-K é resultado que o usuário não pediu. Com
-    # include_stale, nenhuma exclusão acontece (a flag existe para isso).
-    stale_rowids: set = set()
-    if not include_stale:
-        stale_rowids = {r[0] for r in con.execute(
-            "SELECT rowid FROM entries WHERE stale='true'")}
-        if stale_rowids:
-            for r in stale_rowids:
-                final.pop(r, None)
-                via.pop(r, None)
-                snippets.pop(r, None)
-            seeds = [s for s in seeds if s not in stale_rowids]
+    # Stale já foi removido do pool e da população do grafo antes do PPR.
+    # `include_stale` preserva a população completa deliberadamente.
     boost = cfg["skill_boost"] if parsed.skill_hint else None
     rows = {r[0]: r for r in _fetch_entries(con, list(final))}
     for rowid, row in rows.items():

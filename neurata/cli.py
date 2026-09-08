@@ -236,7 +236,8 @@ def _snapshot_push(args: argparse.Namespace,
 
 def _snapshot_set_remote(args: argparse.Namespace,
                          home: NeurataHome) -> "tuple[dict, int]":
-    ensure_repo(home)
+    if not ensure_repo(home):
+        raise SnapshotError("não foi possível preparar o repositório Git")
     set_remote(home, args.set_remote)
     _persist_snapshot_remote(home, args.set_remote)
     return {"ok": True, "remote": args.set_remote}, 0
