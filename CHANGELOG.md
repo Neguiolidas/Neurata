@@ -2,6 +2,53 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.12.0] - 2026-09-09
+
+Neurata was reachable only through its CLI: an agent paid a shell permission
+per call and saw no argument schema at all. 1.12 adds a surface, not a
+capability — an MCP server of its own, plus a Claude Code plugin that wires it
+in. Still deterministic, still zero runtime dependencies.
+
+### Added
+
+- **`neurata-mcp`** — an MCP server over stdio, JSON-RPC 2.0, written against
+  the standard library alone. Newline-delimited framing with a 1 MiB frame
+  ceiling that drains the excess instead of dropping the session. Protocol
+  versions `2024-11-05`, `2025-03-26` and `2025-06-18`; an unknown one falls
+  back to the newest. A tolerant lifecycle answers calls even when a client
+  forgets `notifications/initialized`.
+- **Four tools**: `neurata_query`, `neurata_deposit`, `neurata_expand`,
+  `neurata_shelf`. Each calls the pure function directly, never the CLI's
+  `main()` nor its printing helpers. `expand` deliberately omits `restore`:
+  the roadmap asks for surface, not capability, and restore writes.
+- **Workspace context from the client, never from the server's cwd.** The
+  project is resolved as explicit argument, then the client's `roots/list`,
+  then nothing — declared as `source: "arg" | "roots" | "none"`. Deriving it
+  from the server's own working directory would have biased every ranking with
+  the wrong project, silently. Measured side effect: passing the context in
+  skips the git subprocess that accounted for 96.5 ms of a ~140 ms search.
+- **Claude Code plugin**, under `neurata/integrations/claude_code/assets`,
+  with a marketplace manifest at the repository root: four slash commands, a
+  skill that says *when* to recall and *when* to deposit, and an `.mcp.json`
+  pinning the published version.
+
+### Changed
+
+- **The protocol channel is not `sys.stdout`.** At startup the server
+  duplicates file descriptor 1, points 1 at stderr and swaps `sys.stdout` for
+  `sys.stderr`. The stdio transport spec has a MUST NOT against non-JSON on
+  stdout; enforcing it structurally means an accidental `print` can no longer
+  corrupt a session, rather than every future contributor having to remember.
+- `shelf._meta_value` opens the index read-only. It only reads, and a
+  long-lived server keeps that path alive next to the hourly tick.
+
+### Compatibility
+
+- Index schema remains v16.
+- CLI/result contract remains v6. `project_source` gains the values `arg` and
+  `roots`; no field changes shape or meaning, and the CLI never emits them.
+- No runtime dependencies were added.
+
 ## [1.11.0] - 2026-09-08
 
 A v1.10 made the graph richer, but the stale exclusion happened after the

@@ -1,0 +1,12 @@
+{
+  "name": "neurata",
+  "owner": {"name": "Neguiolidas", "url": "https://github.com/Neguiolidas"},
+  "description": "Neurata: persistent grain memory for Claude Code.",
+  "plugins": [
+    {
+      "name": "neurata",
+      "source": "./neurata/integrations/claude_code/assets",
+      "description": "Persistent grain memory: deposit, query and expand knowledge across sessions."
+    }
+  ]
+}

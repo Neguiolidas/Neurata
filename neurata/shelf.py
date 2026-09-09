@@ -163,10 +163,25 @@ def conflicts(home: NeurataHome) -> dict:
 
 
 def _meta_value(home: NeurataHome, key: str) -> "str | None":
+    """Lê um carimbo do índice. Abre em `mode=ro` porque só lê: um servidor
+    MCP mantém este caminho vivo ao lado do cron do tick, e leitura que *pode*
+    escrever é leitura que pode disputar. O modo somente-leitura tira a
+    possibilidade em vez de confiar em disciplina.
+
+    O que NÃO era problema, medido antes de mexer: a ausência do pragma de WAL
+    aqui não importa, porque WAL é propriedade persistente do arquivo e todo
+    índice existente foi criado pelo `connect()`, que o carimba. E a espera em
+    disputa também já existia: o módulo `sqlite3` do Python define
+    `busy_timeout` de 5000 ms por padrão, então a falta do PRAGMA explícito
+    nunca significou falha instantânea.
+    """
     if not home.index_path.exists():
         return None
     import sqlite3
-    con = sqlite3.connect(home.index_path)
+    try:
+        con = sqlite3.connect(f"{home.index_path.as_uri()}?mode=ro", uri=True)
+    except sqlite3.DatabaseError:
+        return None
     try:
         row = con.execute("SELECT value FROM meta WHERE key=?",
                           (key,)).fetchone()

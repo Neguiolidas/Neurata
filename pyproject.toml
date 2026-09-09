@@ -38,6 +38,10 @@ dev = [
 [project.scripts]
 neurata = "neurata.cli:main"
 neu = "neurata.cli:main"
+# Aponta direto para `server:main`, não para o pacote: `neurata.mcp.__init__`
+# de propósito não reexporta nada, para importar o pacote não arrastar a
+# cadeia de query/deposit/expand/shelf (284 ms medidos).
+neurata-mcp = "neurata.mcp.server:main"
 
 [project.urls]
 Homepage = "https://github.com/Neguiolidas/Neurata"

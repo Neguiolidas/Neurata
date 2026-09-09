@@ -1,0 +1,8 @@
+{
+  "name": "neurata",
+  "version": "1.12.0",
+  "description": "Persistent grain memory for Claude Code: deposit, query and expand knowledge across sessions.",
+  "author": {"name": "Neguiolidas"},
+  "homepage": "https://github.com/Neguiolidas/Neurata",
+  "license": "AGPL-3.0-or-later"
+}

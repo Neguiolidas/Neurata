@@ -112,6 +112,35 @@ neurata --version
 neurata reindex
 ```
 
+## Agents: MCP server and Claude Code plugin
+
+The CLI is one surface; `neurata-mcp` is the other. It speaks MCP over stdio,
+in the standard library alone, and exposes four tools: `neurata_query`,
+`neurata_deposit`, `neurata_expand` and `neurata_shelf`. An agent picks the
+tool from its schema instead of shelling out, and stops paying a shell
+permission per call.
+
+```bash
+neurata-mcp            # stdio server; wire it into any MCP client
+```
+
+For Claude Code there is a plugin that wires it for you, with four slash
+commands and a skill that says when to recall and when to deposit:
+
+```bash
+claude plugin marketplace add Neguiolidas/Neurata
+claude plugin install neurata@neurata
+```
+
+The server never guesses your project from its own working directory — that
+directory is the server's, not yours, and a wrong bias you cannot see is worse
+than no bias. It takes the project from an explicit argument, else from the
+workspace root the client reports, else nothing; every answer declares which,
+as `source: "arg" | "roots" | "none"`.
+
+`expand` is exposed without `restore`: the MCP surface reads, and restoring
+writes.
+
 ## Living links (wikilinks → graph)
 
 `[[wikilinks]]` in a grain's body become graph edges — resolved by
@@ -213,9 +242,10 @@ absorb — run `neurata reindex` after those.
 - Nothing is ever destroyed: archive + quarantine, never delete.
 - Zero runtime dependencies. Python ≥ 3.10.
 
-**Status:** v1.11.0, in daily use on a real vault. `neurata doctor`
+**Status:** v1.12.0, in daily use on a real vault. `neurata doctor`
 reports index health at any moment. Snapshot previews are read-only, managed
 libraries use an isolated local Git identity, and stale grains are excluded
-from graph propagation unless `--include-stale` is explicit.
+from graph propagation unless `--include-stale` is explicit. Agents reach the
+archive through `neurata-mcp` without a shell.
 
 **License:** AGPL-3.0-or-later.
