@@ -2,6 +2,69 @@
 
 Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.13.0] - 2026-09-19
+
+The v1.8 harvest finally filled `entry_tags` and `entry_aliases`, and v1.9
+turned `[[wikilinks]]` into edges — which is what the roadmap waited for
+before an Obsidian provider could exist without dumping fields the index
+discards. 1.13 is that provider, plus the two vault conventions it
+exposed as gaps on the way in.
+
+### Added
+
+- **`neurata harvest obsidian-vault`** — an opt-in provider for an
+  Obsidian vault: point `NEURATA_OBSIDIAN_VAULT` at the vault (that env
+  is the explicit permission; Neurata never writes a byte to the origin)
+  and the vault's conventions become searchable. Notes are collected as
+  `semantic` prose with identity by relative path: moving a file between
+  folders is a new item plus a tombstone; renaming a title keeps it.
+- **Inline `#tags`** — Obsidian has two tag doors and the frontmatter was
+  only one of them. The provider extracts `#tag` from the body with
+  Obsidian's own rules: no headings, nothing inside code fences, nested
+  `#parent/child` kept whole, and a digits-only tag (`#1984`) is not a
+  tag. They land in the mirror's frontmatter next to the declared ones,
+  lower-cased and deduplicated — feeding the same `entry_tags` lane
+  (BM25 weight 2.0) the v1.8 paid for.
+- **The parent folder as a tag** — the immediate folder of a note,
+  lower-cased, on the one taxonomy axis the index accepts without a
+  schema change. `query tag:finances` now covers the vault's structure;
+  the full path stays in the `source_key` as identity.
+- **Vault hygiene**: `.obsidian/` (app config — including plugins with
+  their own `README.md`) and `.trash/` (notes the user deleted) are
+  pruned from the walk. Collecting deleted notes as `semantic` grains
+  was a convention bug, not a hypothesis.
+- **A missing env reports itself**: without `NEURATA_OBSIDIAN_VAULT` the
+  harvest returns zero and the report says why — best-effort like the
+  `project` provider, but never silent.
+
+### Fixed
+
+- **`![[embeds]]` are not links.** The wikilink resolver counted
+  `![[image.png]]` as an unresolved link, inflating `unresolved_links`
+  exactly in the vaults that embed the most. One negative lookahead in
+  the shared pattern; tick and reindex both consume it.
+- **Forward wikilinks inside one tick.** The tick resolves edges at
+  insertion, so a link to a grain that enters later in the same batch —
+  an entire vault arriving at once, where half the links point forward —
+  never got an edge until a full reindex. The tick now resolves the
+  batch once more after the inbox is drained, with the index complete;
+  `INSERT OR IGNORE` absorbs the re-attempts. Tick and reindex agree on
+  the same corpus, measured.
+- **A vanished vault raises instead of erasing.** A renamed or unmounted
+  vault used to scan as empty — and an empty scan plus known entries
+  tombstones everything. Same rule the generic provider already had: a
+  missing source is the caller's error, not a legitimate empty harvest.
+- **`exclude_roots` is the contract for tree-scoped providers** (the
+  generic already had it): the harvest now injects `NEURATA_HOME` for
+  every provider with a namespace, so a home living inside the scanned
+  tree can never collect its own Library. The `project` provider accepts
+  and prunes by the same contract.
+
+### Compatibility
+
+- Index schema remains v16; CLI/result contract remains v6.
+- No runtime dependencies were added.
+
 ## [1.12.0] - 2026-09-09
 
 Neurata was reachable only through its CLI: an agent paid a shell permission

@@ -38,7 +38,10 @@ from neurata.indexdb import (
     regime_of,
 )
 
-_WIKILINK = re.compile(r"\[\[([^\[\]]+)\]\]")
+_WIKILINK = re.compile(r"(?<!!)\[\[([^\[\]]+)\]\]")
+# `(?<!!)`: embed `![[x.png]]` não é link — é anexo renderizado. Casá-lo
+# igual a `[[nota]]` inflava `unresolved_links` exatamente nos vaults que
+# mais usam embeds (v1.13). Tick e reindex compartilham este padrão.
 _AMBIG = -1  # sentinela: título/alias casando 2+ entries
 
 

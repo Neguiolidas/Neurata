@@ -192,3 +192,31 @@ def test_ppr_muda_a_ordem_da_consulta(tmp_path):
     sem_grafo = query(home, "postgres")["results"]
     ordem_sem = [c["id"] for c in sem_grafo]
     assert ordem_com[0] != ordem_sem[0] or ordem_com != ordem_sem
+
+
+def test_tick_aresta_forward_no_mesmo_lote(tmp_path):
+    """Wikilink para alvo que entra DEPOIS no mesmo tick (v1.13).
+
+    A passada 1 resolve na inserção: A catalogado antes de B deixaria
+    `[[B]]` sem aresta até um reindex — metade dos links de um lote de
+    harvest (vault inteiro) é forward. A passada 2 do lote fecha isso.
+    """
+    home = _home(tmp_path)
+    _grao(home, "a", "A", "veja [[b]] antes de agir.")
+    _grao(home, "b", "B", "conteudo do alvo.")
+    rep = curate_tick(home)
+    assert rep.processed == 2
+    assert ("A", "B") in _edges(home)
+
+
+def test_tick_aresta_forward_nao_duplica(tmp_path):
+    """Passada 2 não duplica arestas: backward nasce na 1ª, OR IGNORE
+    absorve a re-tentativa — o total é o mesmo de um reindex."""
+    home = _home(tmp_path)
+    _grao(home, "b", "B", "conteudo do alvo.")
+    _grao(home, "a", "A", "veja [[b]] e [[b]] de novo.")
+    curate_tick(home)
+    assert len(_edges(home)) == 1
+    from neurata.reindex import reindex
+    reindex(home)  # reconciliador de massa concorda
+    assert len(_edges(home)) == 1

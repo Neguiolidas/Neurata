@@ -84,8 +84,14 @@ def item_key(item) -> str:
     return item.key
 
 
-def scan(skills_dir: "Path | None") -> "tuple[list[ProjectSkill], list[Skipped]]":
+def scan(skills_dir: "Path | None", exclude_roots: "tuple" = ()
+         ) -> "tuple[list[ProjectSkill], list[Skipped]]":
     """Colhe o conjunto canônico de `skills_dir` (raiz do repo).
+
+    `exclude_roots` é o contrato de provider root-scoped (v1.13): o
+    harvest injeta o `NEURATA_HOME` — candidato sob essa subárvore é
+    podado antes do I/O. Hoje nenhum arquivo da lista canônica cai aí em
+    cenário real; aceitar é o contrato, podar é a honestidade.
 
     Arquivo ausente é silêncio — é o estado normal de 5 dos 7; só
     presente-e-ilegível (grande, binário, vazio) vira `Skipped`.
@@ -96,6 +102,16 @@ def scan(skills_dir: "Path | None") -> "tuple[list[ProjectSkill], list[Skipped]]
     if skills_dir is None or not Path(skills_dir).is_dir():
         return skills, skipped
     root = Path(skills_dir)
+    blocked = tuple(Path(p).resolve() for p in exclude_roots)
+
+    def _podado(path: Path) -> bool:
+        if not blocked:
+            return False
+        try:
+            real = path.resolve()
+        except OSError:  # candidato já-validado por is_file, paranoia barata
+            return False
+        return any(real == b or real.is_relative_to(b) for b in blocked)
 
     candidatos: list[tuple[Path, str]] = [
         (root / rel, fmt) for rel, fmt in _ROOT_FILES.items()]
@@ -103,6 +119,8 @@ def scan(skills_dir: "Path | None") -> "tuple[list[ProjectSkill], list[Skipped]]
 
     for path, fmt in candidatos:
         if not path.is_file():
+            continue
+        if _podado(path):
             continue
         text, reason = generic._read_text(path, max_size=1_048_576)
         if text is None:

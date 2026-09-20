@@ -160,7 +160,14 @@ def harvest(home: NeurataHome, target: str,
                 raise ValueError(
                     f"origem dentro do NEURATA_HOME ({real_home}): colher a "
                     f"própria Library duplicaria o acervo a cada rodada")
-        scan_args = ((skills_dir,), {})
+            # Sentido inverso do guard — home DENTRO da raiz, legítimo
+            # (`harvest ~/`): o provider poda a subárvore do home para
+            # não auto-colher a Library (o genérico já recebia isso;
+            # v1.13 estende o contrato a TODO root-scoped).
+            scan_args = ((skills_dir,),
+                         {"exclude_roots": (real_home,)})
+        else:
+            scan_args = ((skills_dir,), {})
     namespace = _namespace(target, source_dir)
     if source_dir is None and ns_fn is not None:
         # Provider root-scoped: o que ele "possui" é a raiz resolvida

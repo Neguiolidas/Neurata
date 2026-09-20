@@ -97,8 +97,22 @@ def curate_tick(home: NeurataHome, budget: "int | None" = None) -> TickReport:
                 items = items[:budget]
 
             shingle_sets = dict(indexdb.load_shingle_sets(con))
+            # Itens inseridos neste tick, para a passada 2 de arestas:
+            # a 1ª resolve na inserção e um `[[alvo]]` cujo alvo AINDA
+            # não está no índice não nasce — num lote do harvest (um
+            # vault inteiro de uma vez) metade dos wikilinks é forward.
+            inserted: list = []
             for path in items:
-                _process_item(home, con, tick_id, path, report, shingle_sets)
+                _process_item(home, con, tick_id, path, report, shingle_sets,
+                              inserted)
+            # Passada 2: re-resolve o lote com o índice completo. As
+            # arestas que nasceram na 1ª passada são re-tentadas e o
+            # `INSERT OR IGNORE` as absorve (rowcount 0). Custo por tick
+            # vazio: zero — a lista só tem o que o lote inseriu.
+            for eid, body in inserted:
+                report.edges += _resolve_links(con, eid, body)
+            if inserted:
+                con.commit()
 
             indexdb.stamp_if_unversioned(con)
         finally:
@@ -120,7 +134,8 @@ def curate_tick(home: NeurataHome, budget: "int | None" = None) -> TickReport:
 # ── item pipeline (§1 passos 2–7) ───────────────────────────────────
 
 def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
-                  report: TickReport, shingle_sets: dict) -> None:
+                  report: TickReport, shingle_sets: dict,
+                  inserted: "list | None" = None) -> None:
     rel_src = _relpath(home, path)
 
     if not _guard_ok(home, path):
@@ -155,7 +170,7 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
             return
         if meta.get("source_key"):
             _process_skill_item(home, con, tick_id, path, meta, body,
-                                report, shingle_sets)
+                                report, shingle_sets, inserted)
             return
 
     content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
@@ -227,6 +242,8 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
     anteriores = indexdb.entry_contradictions(con, str(meta["id"]))
     _rowid, n_edges = _index_insert(con, meta, body, rel_dst, "library",
                                     slug)
+    if inserted is not None:
+        inserted.append((str(meta["id"]), body))
     pairs = (_refresh_assertions(con, str(meta["id"]), body, anteriores)
              if regime_of(meta) == "curated" else [])
     con.commit()
@@ -259,7 +276,8 @@ def _process_item(home: NeurataHome, con, tick_id: str, path: Path,
 
 def _process_skill_item(home: NeurataHome, con, tick_id: str, path: Path,
                         meta: dict, body: str, report: TickReport,
-                        shingle_sets: dict) -> None:
+                        shingle_sets: dict,
+                        inserted: "list | None" = None) -> None:
     rel_src = _relpath(home, path)
     source_key = str(meta.get("source_key"))
     row = con.execute(
@@ -269,7 +287,7 @@ def _process_skill_item(home: NeurataHome, con, tick_id: str, path: Path,
 
     if row is None:
         _catalog_skill_item(home, con, tick_id, path, meta, body, report,
-                            shingle_sets, rel_src)
+                            shingle_sets, rel_src, inserted)
         return
 
     entry_id, slug, lib_rel, lib_hash, lib_class = row
@@ -299,12 +317,13 @@ def _process_skill_item(home: NeurataHome, con, tick_id: str, path: Path,
         home, con, tick_id, entry_id=entry_id, slug=slug,
         lib_rel_path=lib_rel, source_key=source_key, new_meta=meta,
         new_body=body, inbox_path=path, rel_src=rel_src, report=report,
-        shingle_sets=shingle_sets)
+        shingle_sets=shingle_sets, inserted=inserted)
 
 
 def _catalog_skill_item(home: NeurataHome, con, tick_id: str, path: Path,
                         meta: dict, body: str, report: TickReport,
-                        shingle_sets: dict, rel_src: str) -> None:
+                        shingle_sets: dict, rel_src: str,
+                        inserted: "list | None" = None) -> None:
     content_hash = hashlib.sha256(body.encode("utf-8")).hexdigest()
     title = str(meta.get("title") or path.stem)
     slug = _unique_slug(con, slugify(title))
@@ -322,6 +341,8 @@ def _catalog_skill_item(home: NeurataHome, con, tick_id: str, path: Path,
     rel_dst = _relpath(home, dest)
     _rowid, n_edges = _index_insert(con, meta, body, rel_dst, "library",
                                     slug)
+    if inserted is not None:
+        inserted.append((str(meta["id"]), body))
     con.commit()
     shingle_sets[str(meta["id"])] = frozenset(shingle_hashes(body))
     report.edges += n_edges
@@ -337,7 +358,8 @@ def _sync_update_in_place(home: NeurataHome, con, tick_id: str, *,
                           entry_id: str, slug: str, lib_rel_path: str,
                           source_key: "str | None", new_meta: dict,
                           new_body: str, inbox_path: Path, rel_src: str,
-                          report: TickReport, shingle_sets: dict) -> None:
+                          report: TickReport, shingle_sets: dict,
+                          inserted: "list | None" = None) -> None:
     """Update-in-place de entry source-keyed. Nunca reconstrói o meta do
     zero: parte do meta antigo (lido da library) e sobrescreve só o
     subconjunto §4 + content_hash/updated, limpando stale/stale_since se
@@ -383,6 +405,8 @@ def _sync_update_in_place(home: NeurataHome, con, tick_id: str, *,
     _index_delete(con, entry_id)
     _rowid, n_edges = _index_insert(con, merged, new_body, lib_rel_path,
                                     "library", slug)
+    if inserted is not None:
+        inserted.append((str(merged.get("id", entry_id)), new_body))
     con.commit()
     item_id = str(merged.get("id", entry_id))
     shingle_sets[item_id] = frozenset(shingle_hashes(new_body))
@@ -906,11 +930,15 @@ def _resolve_links(con, entry_id: str, body: str) -> int:
     consultava aliases que ninguém escreveu — o erro por falta de dado
     que o roadmap chama de teto falso.
 
-    Devolve o nº de arestas NOVAS (o chamador soma no report). Chamado
-    DENTRO de `_index_insert`, então a aresta acompanha a inserção em
-    todas as portas do tick (catálogo, update, adoção) e o
+    Devolve o nº de arestas NOVAS (o chamador soma no report). Chamado na
+    passada 1 DENTRO de `_index_insert`, então a aresta acompanha a
+    inserção em todas as portas do tick (catálogo, update, adoção) e o
     `_index_delete` que antecede o re-insert limpa as arestas do corpo
-    velho — aresta viva é consequência do ponto único de escrita."""
+    velho — aresta viva é consequência do ponto único de escrita. A
+    passada 2 (v1.13), no fim do lote do inbox, re-resolve os itens do
+    lote com o índice completo: wikilink para alvo que entrava DEPOIS no
+    mesmo tick não nascia — metade dos links de um lote de harvest
+    (vault inteiro) é forward. `INSERT OR IGNORE` absorve as repetidas."""
     alvos = _link_targets(body)
     if not alvos:
         return 0

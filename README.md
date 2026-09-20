@@ -101,6 +101,14 @@ neurata harvest project                # THIS repo's instruction files:
 neurata harvest ~/some/dir             # or any directory, format auto-detected
 neurata harvest ~/rules --format rules # or pinned: skill-md, markdown, mdc,
                                        # yaml, rules
+neurata harvest obsidian-vault         # an Obsidian vault: set
+                                       # NEURATA_OBSIDIAN_VAULT to its path
+                                       # (read-only, opt-in). Harvests the
+                                       # vault's conventions: frontmatter
+                                       # tags/aliases, inline `#tags`, the
+                                       # parent folder as a tag, `[[links]]`
+                                       # as edges — and skips `.obsidian/`
+                                       # and `.trash/` entirely
 
 # archive health
 neurata doctor
